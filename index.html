@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maymoon Mainstream Ltd — Loan Management</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="shortcut icon" href="img/logo black.png" type="image/x-icon">
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- LOGIN PAGE -->
+<div id="loginPage">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="logo-icon"><img src="img/logo black.png" alt="Maymoon Logo"></div>
+      <h2>Maymoon Mainstream Ltd</h2>
+      <p>Loan Management System</p>
+    </div>
+    <div id="loginError" class="login-error">⚠ Invalid username or password.</div>
+    <div class="form-group"><label>Username</label><input type="text" id="loginUsername" class="form-control" placeholder="Enter username" autocomplete="username"></div>
+    <div class="form-group"><label>Password</label><input type="password" id="loginPassword" class="form-control" placeholder="Enter password" autocomplete="current-password" onkeypress="if(event.key==='Enter')doLogin()"></div>
+    <button class="btn btn-danger btn-full" style="margin-top:8px" onclick="doLogin()">
+      <svg style="width:16px;height:16px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Sign In
+    </button>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <div class="logo-box"><img src="img/logo black.png" alt="MML logo"></div>
+        <div class="sidebar-logo-text"><div class="name">Maymoon Mainstream</div><div class="sub">Management System</div></div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">
+        <div class="nav-label">Main</div>
+        <button class="nav-item active" onclick="showView('dashboard')" id="nav-dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Dashboard</button>
+        <button class="nav-item" onclick="showView('addKeke')" id="nav-addKeke"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>Register Keke</button>
+        <button class="nav-item" onclick="showView('drivers')" id="nav-drivers"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>All Drivers</button>
+        <button class="nav-item" onclick="showView('alerts')" id="nav-alerts"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>Payment Alerts<span class="badge badge-red" id="alertBadge" style="margin-left:auto;display:none">0</span></button>
+        <button class="nav-item" onclick="showView('payments')" id="nav-payments"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Payment Log</button>
+        <button class="nav-item" onclick="showView('completed')" id="nav-completed"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>Completed Loans</button>
+      </div>
+      <div class="nav-section" id="nav-section-analytics">
+        <div class="nav-label">Analytics</div>
+        <button class="nav-item" onclick="showView('reports')" id="nav-reports"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Reports</button>
+        <button class="nav-item" onclick="showView('shorties')" id="nav-shorties"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="23" y1="11" x2="17" y2="11"/></svg>Shorty Manager</button>
+      </div>
+      <div class="nav-section" id="nav-section-settings">
+        <div class="nav-label">Settings</div>
+        <button class="nav-item" onclick="showView('holiday')" id="nav-holiday"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Holiday / Break</button>
+        <button class="nav-item" onclick="showView('maintenance')" id="nav-maintenance"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>Service & Maintenance<span class="badge badge-red" id="maintenanceBadge" style="margin-left:auto;display:none">!</span></button>
+        <button class="nav-item" onclick="showView('backup')" id="nav-backup"><svg viewBox="0 0 24 24"><polyline points="21 15 21 19 3 19 3 15"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Backup & Restore</button>
+        <button class="nav-item" onclick="showView('activityLog')" id="nav-activityLog"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>Activity Log</button>
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="user-info">
+        <div class="user-avatar" id="sidebarAvatar" style="font-size:.9rem;font-weight:800">?</div>
+        <div class="user-details"><div class="uname" id="sidebarName">—</div><div class="urole" id="sidebarRole">—</div></div>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="btn btn-logout" style="flex:1;font-size:.75rem" onclick="doLogout()"><svg style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>Sign Out</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="hamburger" onclick="openSidebar()"><span></span><span></span><span></span></button>
+        <span class="topbar-title" id="topbarTitle">Dashboard</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex:1;max-width:320px;margin:0 12px">
+        <div class="global-search-wrap">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="globalSearch" class="form-control" placeholder="Search drivers, plates, shorties..." oninput="handleGlobalSearch(this.value)" autocomplete="off">
+          <div id="globalSearchResults" class="global-search-results" style="display:none"></div>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span id="roleBadge" class="badge badge-red" style="display:none"></span>
+        <div class="sync-indicator"><div class="sync-dot"></div><span>Loading…</span></div>
+        <span class="badge badge-green" id="topbarDate"></span>
+      </div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div class="content fade-in" id="view-dashboard">
+      <div class="stats-grid">
+        <div class="stat-card" onclick="showView('drivers')"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M19 17H5c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v9c0 1.1-.9 2-2 2z"/><circle cx="7" cy="20" r="1"/><circle cx="17" cy="20" r="1"/></svg></div><div class="stat-value" id="stat-total-keke">0</div><div class="stat-label">Total Kekes</div></div>
+        <div class="stat-card red" onclick="showView('drivers')"><div class="stat-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div><div class="stat-value" id="stat-active">0</div><div class="stat-label">Active Loans</div></div>
+        <div class="stat-card yellow"><div class="stat-icon"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div><div class="stat-value" id="stat-collected">₦0</div><div class="stat-label">Collected Today</div><div style="font-size:.7rem;color:var(--gray-400);margin-top:2px" id="stat-collected-sub">All time: ₦0</div></div>
+        <div class="stat-card orange" onclick="showView('alerts')"><div class="stat-icon"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div><div class="stat-value" id="stat-overdue">0</div><div class="stat-label">Overdue (3+ days)</div><div style="font-size:.7rem;color:var(--gray-400);margin-top:2px" id="stat-overdue-amt">₦0 uncollected</div></div>
+        <div class="stat-card blue" onclick="showView('completed')"><div class="stat-icon"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div class="stat-value" id="stat-completed">0</div><div class="stat-label">Fully Paid Off</div></div>
+        <div class="stat-card green"><div class="stat-icon"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div><div class="stat-value" id="stat-outstanding">₦0</div><div class="stat-label">Total Outstanding</div><div style="font-size:.7rem;color:var(--gray-400);margin-top:2px">Across all active loans</div></div>
+      </div>
+
+      <!-- Expected vs Actual Today -->
+      <div class="dashboard-grid">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Today's Collection</span><span class="badge badge-green" id="todayDate2"></span></div>
+          <div class="card-body" id="todayCollectionBox"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Quick Actions</span></div>
+          <div class="card-body"><div class="quick-actions">
+            <button class="quick-btn" onclick="showView('addKeke')"><div class="qb-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg></div><div><div class="qt">Register New Keke</div><div class="qs">Add tricycle & driver</div></div></button>
+            <button class="quick-btn" onclick="showView('drivers')"><div class="qb-icon"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div><div><div class="qt">Record Payment</div><div class="qs">Log a driver payment</div></div></button>
+            <button class="quick-btn" onclick="showView('reports')"><div class="qb-icon"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></div><div><div class="qt">Reports</div><div class="qs">Analytics & summaries</div></div></button>
+            <button class="quick-btn" onclick="showView('backup')"><div class="qb-icon"><svg viewBox="0 0 24 24"><polyline points="21 15 21 19 3 19 3 15"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div><div><div class="qt">Backup Data</div><div class="qs">Export all records</div></div></button>
+          </div></div>
+        </div>
+      </div>
+
+      <!-- Approaching completion + Active table -->
+      <div class="dashboard-grid">
+        <div class="card"><div class="card-header"><span class="card-title">Active Loans Overview</span><span class="badge badge-red" id="dash-active-count">0 active</span></div><div class="table-wrap"><table><thead><tr><th>Driver</th><th>Plate</th><th>Batch</th><th>Progress</th><th>Balance</th></tr></thead><tbody id="dashLoansTable"></tbody></table></div></div>
+        <div class="card"><div class="card-header"><span class="card-title">🏁 Almost Done</span><span class="badge badge-green" id="nearlyDoneCount">0</span></div><div class="card-body" id="nearlyDoneList"><div class="empty-state"><p>No drivers near completion yet</p></div></div></div>
+      </div>
+    </div>
+
+    <!-- REGISTER KEKE -->
+    <div class="content fade-in" id="view-addKeke" style="display:none">
+      <div class="card" style="max-width:800px"><div class="card-header"><span class="card-title">Register New Keke</span></div><div class="card-body">
+        <div class="info-box"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Fill in Keke details, Shorty (referrer), Driver, and Guarantor. All three people must be recorded.</p></div>
+        <div class="section-divider"><span>🛺 Keke Information</span></div>
+        <div class="form-grid triple">
+          <div class="form-group"><label>Plate Number *</label><input type="text" id="k_plate" class="form-control" placeholder="e.g. ABC-123-KN"></div>
+          <div class="form-group"><label>PT Number (Permit)</label><input type="text" id="k_pt" class="form-control" placeholder="e.g. PT/KN/2024/001"></div>
+          <div class="form-group"><label>Color / Description</label><input type="text" id="k_desc" class="form-control" placeholder="e.g. Blue Bajaj RE"></div>
+          <div class="form-group"><label>Chassis Number</label><input type="text" id="k_chassis" class="form-control" placeholder="Chassis No."></div>
+          <div class="form-group"><label>Engine Number</label><input type="text" id="k_engine" class="form-control" placeholder="Engine No."></div>
+          <div class="form-group"><label>Year of Manufacture</label><input type="text" id="k_year" class="form-control" placeholder="e.g. 2023"></div>
+        </div>
+        <div class="section-divider"><span>💰 Loan Agreement</span></div>
+        <div class="form-grid">
+          <div class="form-group"><label>Purchase Price (₦) *</label><input type="number" id="k_cost" class="form-control" placeholder="e.g. 1000000" oninput="calcProfit()"></div>
+          <div class="form-group"><label>Total Loan Amount (₦) *</label><input type="number" id="k_total" class="form-control" placeholder="e.g. 5000000" oninput="calcProfit()"></div>
+          <div class="form-group"><label>Batch Group *</label><select id="k_batch" class="form-control"><option value="">Select Batch...</option><option value="A">Batch A</option><option value="B">Batch B</option><option value="C">Batch C</option></select></div>
+          <div class="form-group"><label>Payment Schedule *</label><select id="k_schedule" class="form-control" onchange="calcInstallmentCount()"><option value="daily">Daily</option><option value="3days">Every 3 Days</option><option value="5days">Every 5 Days</option><option value="weekly">Weekly</option></select></div>
+          <div class="form-group"><label>Amount Per Installment (₦) *</label><input type="number" id="k_installment" class="form-control" placeholder="e.g. 30000" oninput="calcInstallmentCount()"></div>
+          <div class="form-group"><label>Start Date *</label><input type="date" id="k_start" class="form-control"></div>
+        </div>
+        <div id="profitBox" style="display:none" class="total-box"><div class="total-row"><span>Purchase Price</span><span id="pb_cost">₦0</span></div><div class="total-row"><span>Total Loan Amount</span><span id="pb_total">₦0</span></div><div class="total-row grand"><span>Expected Profit</span><span id="pb_profit">₦0</span></div></div>
+        <div id="installmentSummary" style="display:none;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius-sm);padding:12px 16px;margin-top:10px;font-size:.83rem;color:var(--gray-700)">Estimated <strong id="is_count">0</strong> installments of <strong id="is_each">₦0</strong>.</div>
+        <div class="section-divider"><span>🔗 Shorty (Referrer) Details</span></div>
+        <div class="form-grid">
+          <div class="form-group"><label>Shorty Full Name *</label><input type="text" id="k_shorty" class="form-control" placeholder="e.g. Kabiru Dan Malam"></div>
+          <div class="form-group"><label>Shorty Phone *</label><input type="text" id="k_shorty_phone" class="form-control" placeholder="e.g. 08011223344"></div>
+          <div class="form-group"><label>Shorty Address</label><input type="text" id="k_shorty_address" class="form-control" placeholder="Shorty's home address"></div>
+          <div class="form-group"><label>Shorty Alt Phone</label><input type="text" id="k_shorty_phone2" class="form-control" placeholder="Second number"></div>
+          <div class="form-group form-full"><label>Shorty Photo <span style="font-size:.72rem;font-weight:400;color:var(--gray-400)">(Optional — can add later)</span></label>
+            <div style="display:flex;gap:8px;margin-bottom:6px">
+              <div class="photo-upload-box" style="flex:1" onclick="document.getElementById('shortyPhotoInput').click()">
+                <input type="file" id="shortyPhotoInput" accept="image/*" style="display:none" onchange="previewPhoto(this,'shortyPreview','shortyPhotoBox')">
+                <div id="shortyPhotoBox"><div class="pu-icon">📷</div><div class="pu-label">Upload Shorty Photo</div><div class="pu-sub">Tap to select image • JPG, PNG</div></div>
+                <img id="shortyPreview" class="photo-preview" alt="Shorty photo">
+              </div>
+              <button type="button" class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center" onclick="openQuickCamera('shortyPreview','shortyPhotoBox')">📸 Camera</button>
+            </div>
+          </div>
+        </div>
+        <div class="section-divider"><span>👤 Driver Details</span></div>
+        <div class="form-grid">
+          <div class="form-group"><label>Full Name *</label><input type="text" id="k_driver" class="form-control" placeholder="e.g. Musa Abdullahi"></div>
+          <div class="form-group"><label>Phone Number *</label><input type="text" id="k_phone" class="form-control" placeholder="e.g. 08012345678"></div>
+          <div class="form-group"><label>Alternative Phone</label><input type="text" id="k_phone2" class="form-control" placeholder="Second number"></div>
+          <div class="form-group"><label>Home Address</label><input type="text" id="k_address" class="form-control" placeholder="Full home address"></div>
+          <div class="form-group form-full"><label>Driver Photo <span style="font-size:.72rem;font-weight:400;color:var(--gray-400)">(Optional — can add later)</span></label>
+            <div style="display:flex;gap:8px;margin-bottom:6px">
+              <div class="photo-upload-box" style="flex:1" onclick="document.getElementById('driverPhotoInput').click()">
+                <input type="file" id="driverPhotoInput" accept="image/*" style="display:none" onchange="previewPhoto(this,'driverPreview','driverPhotoBox')">
+                <div id="driverPhotoBox"><div class="pu-icon">📷</div><div class="pu-label">Upload Driver Photo</div><div class="pu-sub">Tap to select image • JPG, PNG</div></div>
+                <img id="driverPreview" class="photo-preview" alt="Driver photo">
+              </div>
+              <button type="button" class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center" onclick="openQuickCamera('driverPreview','driverPhotoBox')">📸 Camera</button>
+            </div>
+          </div>
+        </div>
+        <div class="section-divider"><span>🤝 Guarantor Details</span></div>
+        <div class="form-grid">
+          <div class="form-group"><label>Guarantor Full Name</label><input type="text" id="k_guarantor" class="form-control" placeholder="e.g. Alhaji Sani Musa"></div>
+          <div class="form-group"><label>Guarantor Phone</label><input type="text" id="k_gphone" class="form-control" placeholder="e.g. 08098765432"></div>
+          <div class="form-group"><label>Relationship to Driver</label><select id="k_grel" class="form-control"><option value="">Select...</option><option>Father</option><option>Mother</option><option>Brother</option><option>Sister</option><option>Uncle</option><option>Friend</option><option>Employer</option><option>Other</option></select></div>
+          <div class="form-group"><label>Guarantor Address</label><input type="text" id="k_gaddress" class="form-control" placeholder="Guarantor's address"></div>
+          <div class="form-group form-full"><label>Guarantor Photo <span style="font-size:.72rem;font-weight:400;color:var(--gray-400)">(Optional — can add later)</span></label>
+            <div style="display:flex;gap:8px;margin-bottom:6px">
+              <div class="photo-upload-box" style="flex:1" onclick="document.getElementById('guarantorPhotoInput').click()">
+                <input type="file" id="guarantorPhotoInput" accept="image/*" style="display:none" onchange="previewPhoto(this,'guarantorPreview','guarantorPhotoBox')">
+                <div id="guarantorPhotoBox"><div class="pu-icon">📷</div><div class="pu-label">Upload Guarantor Photo</div><div class="pu-sub">Tap to select image • JPG, PNG</div></div>
+                <img id="guarantorPreview" class="photo-preview" alt="Guarantor photo">
+              </div>
+              <button type="button" class="btn btn-outline btn-sm" style="flex-shrink:0;align-self:center" onclick="openQuickCamera('guarantorPreview','guarantorPhotoBox')">📸 Camera</button>
+            </div>
+          </div>
+        </div>
+        <div class="section-divider"><span>📝 Additional Notes</span></div>
+        <div class="form-group"><label>Notes / Remarks</label><textarea id="k_notes" class="form-control" placeholder="Any extra information about the agreement..."></textarea></div>
+        <button class="btn btn-primary btn-full" id="saveKekeBtn" onclick="saveKeke()"><svg style="width:15px;height:15px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save & Register Keke</button>
+      </div></div>
+    </div>
+
+    <!-- ALL DRIVERS -->
+    <div class="content fade-in" id="view-drivers" style="display:none">
+      <div class="search-bar">
+        <div class="search-input-wrap"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="driverSearch" class="form-control search-input" placeholder="Search driver, plate, PT, shorty..." oninput="renderDrivers()"></div>
+        <select id="driverFilter" class="form-control" style="width:140px" onchange="renderDrivers()"><option value="">All Status</option><option value="active">Active</option><option value="repossession">Repossession</option><option value="on_repair">On Repair</option><option value="completed">Completed</option></select>
+        <select id="batchFilter" class="form-control" style="width:120px" onchange="renderDrivers()"><option value="">All Batches</option><option value="A">Batch A</option><option value="B">Batch B</option><option value="C">Batch C</option></select>
+      </div>
+      <div id="kekeGrid" class="keke-grid"><div class="empty-state"><p>Loading...</p></div></div>
+    </div>
+
+    <!-- ALERTS -->
+    <div class="content fade-in" id="view-alerts" style="display:none">
+      <!-- Batch Payment Schedule Config -->
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-header"><span class="card-title">📅 Batch Payment Schedules</span><button class="btn btn-primary btn-sm" onclick="saveBatchSchedules()">💾 Save Schedules</button></div>
+        <div class="card-body">
+          <div class="info-box" style="margin-bottom:14px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Set a starting date for each batch. Payment days repeat every <strong>3 days</strong> from that date. On payment day, each batch's due drivers appear below.</p></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+            <div class="batch-sched-card A"><div style="font-weight:700;margin-bottom:8px;font-size:.85rem">Batch A</div><div class="form-group" style="margin-bottom:0"><label>Payment Start Date</label><input type="date" id="bsched_A" class="form-control" style="margin-top:4px"></div></div>
+            <div class="batch-sched-card B"><div style="font-weight:700;margin-bottom:8px;font-size:.85rem">Batch B</div><div class="form-group" style="margin-bottom:0"><label>Payment Start Date</label><input type="date" id="bsched_B" class="form-control" style="margin-top:4px"></div></div>
+            <div class="batch-sched-card C"><div style="font-weight:700;margin-bottom:8px;font-size:.85rem">Batch C</div><div class="form-group" style="margin-bottom:0"><label>Payment Start Date</label><input type="date" id="bsched_C" class="form-control" style="margin-top:4px"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="info-box" style="border-color:rgba(208,2,27,.2);background:var(--red-bg)"><svg style="stroke:var(--red)" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><p style="color:var(--gray-700)">Drivers listed here have <strong style="color:var(--red)">not made any payment in the last 3+ days</strong>. Each batch pays every 3 days — drivers are flagged after missing one full cycle.</p></div>
+      <div class="card"><div class="card-header"><span class="card-title">Drivers Requiring Follow-Up</span><span class="badge badge-red" id="alertCount">0 drivers</span></div><div class="card-body" id="alertsList"></div></div>
+    </div>
+
+    <!-- PAYMENTS -->
+    <div class="content fade-in" id="view-payments" style="display:none">
+      <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius);padding:16px 20px;margin-bottom:18px">
+        <div style="font-size:.72rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📄 Download PDF — Date Range</div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+          <div><label style="font-size:.73rem;color:var(--gray-600);font-weight:600;display:block;margin-bottom:3px">From</label><input type="date" id="pdfFrom" class="form-control" style="padding:7px 10px;font-size:.82rem;width:145px"></div>
+          <div><label style="font-size:.73rem;color:var(--gray-600);font-weight:600;display:block;margin-bottom:3px">To</label><input type="date" id="pdfTo" class="form-control" style="padding:7px 10px;font-size:.82rem;width:145px"></div>
+          <button class="btn btn-primary btn-sm" onclick="downloadAllPaymentsPDF()" style="height:36px;display:flex;align-items:center;gap:5px"><svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download PDF</button>
+          <span style="font-size:.72rem;color:var(--gray-400);align-self:center">Leave empty for all records</span>
+        </div>
+      </div>
+      <div class="search-bar">
+        <div class="search-input-wrap"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="paySearch" class="form-control search-input" placeholder="Search driver or plate..." oninput="renderPayments()"></div>
+        <input type="date" id="payDate" class="form-control" style="width:155px" onchange="renderPayments()">
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('paySearch').value='';document.getElementById('payDate').value='';renderPayments()">Clear</button>
+      </div>
+      <div class="card"><div class="card-header"><span class="card-title">All Payment Records</span><span class="badge badge-green" id="payCount">0 records</span></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Driver</th><th>Plate</th><th>Batch</th><th>Amount</th><th>Balance After</th><th>Note</th><th id="payActionsHeader">Actions</th></tr></thead><tbody id="paymentsTable"></tbody></table></div></div>
+    </div>
+
+    <!-- COMPLETED -->
+    <div class="content fade-in" id="view-completed" style="display:none">
+      <div class="card"><div class="card-header"><span class="card-title">Completed Loans — Ownership Transferred</span><span class="badge badge-green" id="completedCount">0 kekes</span></div><div class="table-wrap"><table><thead><tr><th>Driver</th><th>Plate / PT</th><th>Batch</th><th>Cost</th><th>Collected</th><th>Profit</th><th>Completed</th></tr></thead><tbody id="completedTable"></tbody></table></div></div>
+    </div>
+
+    <!-- REPORTS -->
+    <div class="content fade-in" id="view-reports" style="display:none">
+      <div class="report-controls">
+        <div class="form-group" style="margin:0"><label style="font-size:.75rem;font-weight:700;color:var(--gray-600);display:block;margin-bottom:4px">Period</label>
+          <select id="reportPeriod" class="form-control" onchange="renderReports()"><option value="week">This Week</option><option value="month" selected>This Month</option><option value="3month">Last 3 Months</option><option value="year">This Year</option><option value="all">All Time</option></select>
+        </div>
+        <div class="form-group" style="margin:0"><label style="font-size:.75rem;font-weight:700;color:var(--gray-600);display:block;margin-bottom:4px">Batch Filter</label>
+          <select id="reportBatch" class="form-control" onchange="renderReports()"><option value="">All Batches</option><option value="A">Batch A</option><option value="B">Batch B</option><option value="C">Batch C</option></select>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="downloadReportPDF()" style="align-self:flex-end;height:38px;display:flex;align-items:center;gap:5px"><svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export PDF</button>
+      </div>
+      <div id="reportsContainer"></div>
+    </div>
+
+    <!-- SHORTY MANAGER -->
+    <div class="content fade-in" id="view-shorties" style="display:none">
+      <div class="search-bar">
+        <div class="search-input-wrap"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="shortySearch" class="form-control search-input" placeholder="Search shorty name or phone..." oninput="renderShorties()"></div>
+      </div>
+      <div id="shortiesContainer"></div>
+    </div>
+
+    <!-- HOLIDAY -->
+    <div class="content fade-in" id="view-holiday" style="display:none">
+      <div class="card" style="max-width:720px">
+        <div class="card-header">
+          <span class="card-title">🗓️ Holiday / Break Settings</span>
+          <button class="btn btn-primary btn-sm" onclick="saveHolidaySettings()">💾 Save All Break Settings</button>
+        </div>
+        <div class="card-body">
+          <div class="info-box"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Set a <strong>Break Start Date</strong>, <strong>Resume Date</strong>, and <strong>Reason for Break</strong> per batch. Payment overdue alerts are paused for any batch currently on break.</p></div>
+          <div id="holidayBatchCards"></div>
+        </div>
+      </div>
+      <div class="card" style="max-width:720px;margin-top:18px">
+        <div class="card-header"><span class="card-title">📋 Current Break Status</span></div>
+        <div class="card-body" id="holidayStatus"></div>
+      </div>
+    </div>
+
+    <!-- SERVICE & MAINTENANCE -->
+    <div class="content fade-in" id="view-maintenance" style="display:none">
+      <div class="info-box"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><p>Each keke should be serviced every <strong>3 weeks</strong>. Kekes overdue for service are shown in red. Log every check here and keep full service history.</p></div>
+      <div class="search-bar">
+        <div class="search-input-wrap"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="maintSearch" class="form-control search-input" placeholder="Search keke plate or driver..." oninput="renderMaintenance()"></div>
+        <select id="maintFilter" class="form-control" style="width:160px" onchange="renderMaintenance()"><option value="">All Kekes</option><option value="overdue">Overdue Only</option><option value="ok">Up to Date</option></select>
+      </div>
+      <div id="maintenanceContainer"><div class="empty-state"><p>Loading...</p></div></div>
+    </div>
+
+    <!-- BACKUP & RESTORE -->
+    <div class="content fade-in" id="view-backup" style="display:none">
+      <div class="card" style="max-width:640px">
+        <div class="card-header"><span class="card-title">💾 Data Backup</span></div>
+        <div class="card-body">
+          <div class="info-box"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p><strong>Important:</strong> Export your data regularly. If browser cache is cleared, all local data will be lost. This backup file can be restored at any time.</p></div>
+          <div id="backupStats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px"></div>
+          <button class="btn btn-primary btn-full" onclick="exportBackup()" style="margin-bottom:12px">
+            <svg style="width:15px;height:15px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export Backup (JSON)
+          </button>
+          <div style="font-size:.74rem;color:var(--gray-500);text-align:center;margin-bottom:20px">Downloads a file with all your kekes, payments, complaints and activity log</div>
+        </div>
+      </div>
+      <div class="card" style="max-width:640px;margin-top:18px">
+        <div class="card-header"><span class="card-title">📂 Restore from Backup</span></div>
+        <div class="card-body">
+          <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;font-size:.83rem;color:#856404">⚠️ Restoring will <strong>replace all current data</strong>. Make sure you are importing the correct backup file.</div>
+          <div class="photo-upload-box" onclick="document.getElementById('backupFileInput').click()" style="border-style:dashed">
+            <input type="file" id="backupFileInput" accept=".json" style="display:none" onchange="importBackup(this)">
+            <div style="text-align:center;padding:12px 0">
+              <div style="font-size:2rem;margin-bottom:8px">📂</div>
+              <div style="font-weight:600;color:var(--gray-700)">Click to select backup file</div>
+              <div style="font-size:.75rem;color:var(--gray-400);margin-top:4px">Only .json files exported from this system</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ACTIVITY LOG -->
+    <div class="content fade-in" id="view-activityLog" style="display:none">
+      <div class="search-bar">
+        <div class="search-input-wrap"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="logSearch" class="form-control search-input" placeholder="Search activities..." oninput="renderActivityLog()"></div>
+        <select id="logFilter" class="form-control" style="width:160px" onchange="renderActivityLog()"><option value="">All Actions</option><option value="payment">Payments</option><option value="register">Registrations</option><option value="edit">Edits</option><option value="delete">Deletions</option><option value="complaint">Complaints</option></select>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('logSearch').value='';document.getElementById('logFilter').value='';renderActivityLog()">Clear</button>
+      </div>
+      <div class="card"><div class="card-header"><span class="card-title">Recent Activity Log</span><span class="badge badge-gray" id="logCount">0 entries</span></div><div class="card-body" id="activityLogList"><div class="empty-state"><p>No activity recorded yet.</p></div></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- MODALS -->
+<!-- EDIT KEKE -->
+<div class="modal-overlay" id="editKekeModal"><div class="modal modal-lg">
+  <div class="modal-header"><h3 id="editKekeTitle">Edit Driver / Keke</h3><button class="btn-close" onclick="closeEditKekeModal()">✕</button></div>
+  <div class="modal-body">
+    <div class="form-grid triple">
+      <div class="form-group"><label>Plate Number *</label><input type="text" id="ek_plate" class="form-control"></div>
+      <div class="form-group"><label>PT Number</label><input type="text" id="ek_pt" class="form-control"></div>
+      <div class="form-group"><label>Color / Description</label><input type="text" id="ek_desc" class="form-control"></div>
+      <div class="form-group"><label>Chassis Number</label><input type="text" id="ek_chassis" class="form-control"></div>
+      <div class="form-group"><label>Engine Number</label><input type="text" id="ek_engine" class="form-control"></div>
+      <div class="form-group"><label>Year</label><input type="text" id="ek_year" class="form-control"></div>
+    </div>
+    <div class="section-divider"><span>💰 Loan</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Purchase Price (₦)</label><input type="number" id="ek_cost" class="form-control"></div>
+      <div class="form-group"><label>Total Loan (₦)</label><input type="number" id="ek_total" class="form-control"></div>
+      <div class="form-group"><label>Amount Paid (₦)</label><input type="number" id="ek_paid" class="form-control"></div>
+      <div class="form-group"><label>Installment (₦)</label><input type="number" id="ek_inst" class="form-control"></div>
+      <div class="form-group"><label>Schedule</label><select id="ek_schedule" class="form-control"><option value="daily">Daily</option><option value="3days">Every 3 Days</option><option value="5days">Every 5 Days</option><option value="weekly">Weekly</option></select></div>
+      <div class="form-group"><label>Batch</label><select id="ek_batch" class="form-control"><option value="">—</option><option value="A">Batch A</option><option value="B">Batch B</option><option value="C">Batch C</option></select></div>
+      <div class="form-group"><label>Start Date</label><input type="date" id="ek_start" class="form-control"></div>
+      <div class="form-group"><label>Driver Status</label><select id="ek_status" class="form-control"><option value="active">Active</option><option value="repossession">Repossession</option><option value="on_repair">On Repair</option><option value="completed">Completed</option></select></div>
+    </div>
+    <div class="section-divider"><span>🔗 Shorty</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Shorty Name</label><input type="text" id="ek_shorty" class="form-control"></div>
+      <div class="form-group"><label>Shorty Phone</label><input type="text" id="ek_shorty_phone" class="form-control"></div>
+      <div class="form-group"><label>Shorty Address</label><input type="text" id="ek_shorty_address" class="form-control"></div>
+    </div>
+    <div class="section-divider"><span>👤 Driver</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Full Name *</label><input type="text" id="ek_driver" class="form-control"></div>
+      <div class="form-group"><label>Phone *</label><input type="text" id="ek_phone" class="form-control"></div>
+      <div class="form-group"><label>Alt Phone</label><input type="text" id="ek_phone2" class="form-control"></div>
+      <div class="form-group"><label>Address</label><input type="text" id="ek_address" class="form-control"></div>
+    </div>
+    <div class="section-divider"><span>🤝 Guarantor</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Guarantor Name</label><input type="text" id="ek_guarantor" class="form-control"></div>
+      <div class="form-group"><label>Guarantor Phone</label><input type="text" id="ek_gphone" class="form-control"></div>
+      <div class="form-group"><label>Relationship</label><select id="ek_grel" class="form-control"><option value="">Select...</option><option>Father</option><option>Mother</option><option>Brother</option><option>Sister</option><option>Uncle</option><option>Friend</option><option>Employer</option><option>Other</option></select></div>
+      <div class="form-group"><label>Guarantor Address</label><input type="text" id="ek_gaddress" class="form-control"></div>
+    </div>
+    <div class="form-group"><label>Notes</label><textarea id="ek_notes" class="form-control"></textarea></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-primary" id="saveEditKekeBtn" onclick="saveEditKeke()">Save Changes</button>
+    <button class="btn btn-danger btn-sm" onclick="deleteKeke()">🗑️ Delete Keke</button>
+    <button class="btn btn-outline btn-sm" onclick="closeEditKekeModal()">Cancel</button>
+  </div>
+</div></div>
+
+<!-- REASSIGN MODAL -->
+<div class="modal-overlay" id="repoModal"><div class="modal modal-lg">
+  <div class="modal-header"><h3 id="repoTitle">Reassign Keke to New Driver</h3><button class="btn-close" onclick="closeRepoModal()">✕</button></div>
+  <div class="modal-body">
+    <div id="repoKekeInfo" class="info-box" style="margin-bottom:16px"></div>
+    <div class="section-divider"><span>🔗 New Shorty</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Shorty Full Name *</label><input type="text" id="repo_shorty" class="form-control"></div>
+      <div class="form-group"><label>Shorty Phone *</label><input type="text" id="repo_shorty_phone" class="form-control"></div>
+    </div>
+    <div class="section-divider"><span>👤 New Driver</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Full Name *</label><input type="text" id="repo_driver" class="form-control"></div>
+      <div class="form-group"><label>Phone *</label><input type="text" id="repo_phone" class="form-control"></div>
+      <div class="form-group"><label>Alt Phone</label><input type="text" id="repo_phone2" class="form-control"></div>
+      <div class="form-group"><label>Address</label><input type="text" id="repo_address" class="form-control"></div>
+    </div>
+    <div class="section-divider"><span>🤝 New Guarantor</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label>Guarantor Name</label><input type="text" id="repo_guarantor" class="form-control"></div>
+      <div class="form-group"><label>Guarantor Phone</label><input type="text" id="repo_gphone" class="form-control"></div>
+      <div class="form-group"><label>Relationship</label><select id="repo_grel" class="form-control"><option value="">Select...</option><option>Father</option><option>Mother</option><option>Brother</option><option>Sister</option><option>Uncle</option><option>Friend</option><option>Employer</option><option>Other</option></select></div>
+      <div class="form-group"><label>Guarantor Address</label><input type="text" id="repo_gaddress" class="form-control"></div>
+    </div>
+    <div class="section-divider"><span>💰 New Loan Terms</span></div>
+    <div class="form-grid">
+      <div class="form-group"><label>New Loan Amount (₦) *</label><input type="number" id="repo_total" class="form-control"></div>
+      <div class="form-group"><label>Installment (₦) *</label><input type="number" id="repo_inst" class="form-control"></div>
+      <div class="form-group"><label>Schedule</label><select id="repo_schedule" class="form-control"><option value="daily">Daily</option><option value="3days">Every 3 Days</option><option value="5days">Every 5 Days</option><option value="weekly">Weekly</option></select></div>
+      <div class="form-group"><label>Batch</label><select id="repo_batch" class="form-control"><option value="">—</option><option value="A">Batch A</option><option value="B">Batch B</option><option value="C">Batch C</option></select></div>
+      <div class="form-group"><label>New Start Date *</label><input type="date" id="repo_start" class="form-control"></div>
+    </div>
+    <div class="form-group"><label>Notes</label><textarea id="repo_notes" class="form-control" placeholder="Reason for repossession..."></textarea></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-danger" id="saveRepoBtn" onclick="saveReassign()">🔄 Reassign to New Driver</button>
+    <button class="btn btn-outline btn-sm" onclick="closeRepoModal()">Cancel</button>
+  </div>
+</div></div>
+
+<!-- EDIT PAYMENT -->
+<div class="modal-overlay" id="editPaymentModal"><div class="modal">
+  <div class="modal-header"><h3>Edit Payment Record</h3><button class="btn-close" onclick="closeEditPaymentModal()">✕</button></div>
+  <div class="modal-body">
+    <div class="form-group"><label>Amount (₦) *</label><input type="number" id="ep_amount" class="form-control"></div>
+    <div class="form-group"><label>Payment Date *</label><input type="date" id="ep_date" class="form-control"></div>
+    <div class="form-group"><label>Balance After (₦)</label><input type="number" id="ep_balance" class="form-control"></div>
+    <div class="form-group"><label>Note</label><input type="text" id="ep_note" class="form-control"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-primary btn-sm" id="saveEditPayBtn" onclick="saveEditPayment()">Save Changes</button>
+    <button class="btn btn-danger btn-sm" onclick="deletePayment()">Delete Payment</button>
+    <button class="btn btn-outline btn-sm" onclick="closeEditPaymentModal()">Cancel</button>
+  </div>
+</div></div>
+
+<!-- RECORD PAYMENT -->
+<div class="modal-overlay" id="paymentModal"><div class="modal">
+  <div class="modal-header"><h3 id="pmTitle">Record Payment</h3><button class="btn-close" onclick="closePaymentModal()">✕</button></div>
+  <div class="modal-body">
+    <div id="pmLoanSummary" style="background:var(--gray-50);border-radius:var(--radius-sm);padding:14px;margin-bottom:18px"></div>
+    <div class="form-group"><label>Amount Paid (₦) *</label><input type="number" id="pm_amount" class="form-control" placeholder="Enter amount" oninput="checkShortPayment(this)"></div>
+    <div id="pmShortWarning" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:var(--radius-sm);padding:10px 14px;font-size:.82rem;color:#856404;margin-bottom:10px">⚠️ Amount is less than expected installment — will be marked as <strong>short payment</strong> (shown in orange).</div>
+    <div class="form-group"><label>Payment Date *</label><input type="date" id="pm_date" class="form-control"></div>
+    <div class="form-group"><label>Note (Optional)</label><input type="text" id="pm_note" class="form-control" placeholder="e.g. Cash, bank transfer..."></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-primary" id="savePayBtn" onclick="savePayment()"><svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Record Payment</button>
+    <button class="btn btn-outline btn-sm" onclick="closePaymentModal()">Cancel</button>
+  </div>
+</div></div>
+
+<!-- DETAIL MODAL -->
+<div class="modal-overlay" id="detailModal"><div class="modal modal-lg">
+  <div class="modal-header"><h3 id="dmTitle">Keke Details</h3><button class="btn-close" onclick="closeDetailModal()">✕</button></div>
+  <div class="modal-body" id="dmBody"></div>
+  <div class="modal-footer" style="flex-direction:column;align-items:stretch;gap:12px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-outline btn-sm" onclick="openDocumentsModal(currentDetailKekeId)" style="display:flex;align-items:center;gap:5px">
+        <svg style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.5" viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+        📁 Documents
+      </button>
+      <button class="btn btn-outline btn-sm" onclick="openPhotoUpdateModal(currentDetailKekeId,'driver')" style="display:flex;align-items:center;gap:5px">
+        📷 Update Driver Photo
+      </button>
+      <button class="btn btn-outline btn-sm" onclick="openPhotoUpdateModal(currentDetailKekeId,'shorty')" style="display:flex;align-items:center;gap:5px">
+        📷 Update Shorty Photo
+      </button>
+      <button class="btn btn-outline btn-sm" onclick="openPhotoUpdateModal(currentDetailKekeId,'guarantor')" style="display:flex;align-items:center;gap:5px">
+        📷 Update Guarantor Photo
+      </button>
+    </div>
+    <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius-sm);padding:13px 16px">
+      <div style="font-size:.72rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:9px">📄 Download Payment Statement</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
+        <div><label style="font-size:.72rem;color:var(--gray-600);font-weight:600;display:block;margin-bottom:3px">From Date</label><input type="date" id="dm_pdf_from" class="form-control" style="padding:7px 10px;font-size:.82rem"></div>
+        <div><label style="font-size:.72rem;color:var(--gray-600);font-weight:600;display:block;margin-bottom:3px">To Date</label><input type="date" id="dm_pdf_to" class="form-control" style="padding:7px 10px;font-size:.82rem"></div>
+        <button class="btn btn-primary btn-sm" onclick="downloadDriverPDF()" style="height:36px;white-space:nowrap;display:flex;align-items:center;gap:5px"><svg style="width:12px;height:12px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Download</button>
+      </div>
+      <div style="font-size:.71rem;color:var(--gray-400);margin-top:5px">Leave empty to download all-time statement</div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-outline btn-sm" onclick="closeDetailModal()">Close</button></div>
+  </div>
+</div></div>
+
+<!-- COMPLAINT MODAL -->
+<div class="modal-overlay" id="complaintModal"><div class="modal modal-lg">
+  <div class="modal-header"><h3 id="complaintTitle">Complaint Log</h3><button class="btn-close" onclick="closeComplaintModal()">✕</button></div>
+  <div class="modal-body">
+    <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius-sm);padding:14px;margin-bottom:16px">
+      <div style="font-size:.74rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">➕ Add New Complaint / Issue</div>
+      <div class="form-group"><label>Complaint / Issue</label><textarea id="comp_text" class="form-control" rows="3" placeholder="Describe the issue or complaint in detail..."></textarea></div>
+      <div class="form-grid" style="margin-top:8px">
+        <div class="form-group"><label>Date</label><input type="date" id="comp_date" class="form-control"></div>
+        <div class="form-group"><label>Category</label><select id="comp_category" class="form-control"><option value="payment">Payment Issue</option><option value="behaviour">Behaviour</option><option value="accident">Accident / Damage</option><option value="missing">Missing / No Contact</option><option value="other">Other</option></select></div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="saveComplaint()" style="margin-top:4px">➕ Add Complaint</button>
+    </div>
+    <div id="complaintList"></div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-outline btn-sm" onclick="closeComplaintModal()">Close</button></div>
+</div></div>
+
+<!-- SERVICE LOG MODAL -->
+<div class="modal-overlay" id="serviceModal"><div class="modal modal-lg">
+  <div class="modal-header"><h3 id="serviceModalTitle">🔧 Service Log</h3><button class="btn-close" onclick="closeServiceModal()">✕</button></div>
+  <div class="modal-body">
+    <div id="serviceKekeInfo" class="info-box" style="margin-bottom:16px"></div>
+    <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius-sm);padding:16px;margin-bottom:18px">
+      <div style="font-size:.74rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">➕ Add New Service Record</div>
+      <div class="form-grid">
+        <div class="form-group"><label>Service Date *</label><input type="date" id="svc_date" class="form-control"></div>
+        <div class="form-group"><label>Keke Condition *</label><select id="svc_condition" class="form-control"><option value="good">✅ Good</option><option value="fair">⚠️ Fair</option><option value="poor">🔴 Poor</option></select></div>
+        <div class="form-group"><label>Serviced?</label><select id="svc_done" class="form-control"><option value="yes">✅ Yes — Serviced</option><option value="no">❌ No — Not Serviced</option></select></div>
+        <div class="form-group"><label>Mechanic / Workshop</label><input type="text" id="svc_mechanic" class="form-control" placeholder="e.g. Alhaji Motors"></div>
+        <div class="form-group form-full"><label>Notes / Details</label><textarea id="svc_notes" class="form-control" rows="2" placeholder="What was checked, repaired, or replaced..."></textarea></div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="saveServiceRecord()">➕ Add Service Record</button>
+    </div>
+    <div class="svc-history-footer" style="margin-bottom:14px;padding:0 0 14px;border-bottom:1px solid var(--gray-200)">
+      <span style="font-size:.82rem;font-weight:700;color:var(--gray-700)">📋 Service History</span>
+      <button class="btn btn-outline btn-sm" onclick="downloadServiceHistoryPDF()" style="display:flex;align-items:center;gap:5px">
+        <svg style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download History PDF
+      </button>
+    </div>
+    <div id="serviceHistoryList"></div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-outline btn-sm" onclick="closeServiceModal()">Close</button></div>
+</div></div>
+
+<!-- PHOTO UPDATE MODAL -->
+<div class="modal-overlay" id="photoUpdateModal"><div class="modal">
+  <div class="modal-header"><h3 id="photoUpdateTitle">📷 Update Photo</h3><button class="btn-close" onclick="closePhotoUpdateModal()">✕</button></div>
+  <div class="modal-body">
+    <div class="photo-type-info">
+      <span>🛺</span>
+      <span id="photoUpdateInfo">Updating photo for driver</span>
+    </div>
+    <div class="photo-tabs">
+      <button class="photo-tab active" id="tabUpload" onclick="switchPhotoTab('upload')">📁 Upload from Device</button>
+      <button class="photo-tab" id="tabCamera" onclick="switchPhotoTab('camera')">📸 Take Photo (Camera)</button>
+    </div>
+    <!-- Upload Tab -->
+    <div id="photoTabUpload">
+      <div class="photo-upload-box" onclick="document.getElementById('photoUpdateInput').click()" style="margin-bottom:12px">
+        <input type="file" id="photoUpdateInput" accept="image/*" style="display:none" onchange="previewUpdatePhoto(this)">
+        <div id="photoUpdateBox"><div class="pu-icon">📷</div><div class="pu-label">Tap to select photo</div><div class="pu-sub">JPG, PNG supported</div></div>
+        <img id="photoUpdatePreview" class="photo-preview" alt="Preview" style="max-height:180px">
+      </div>
+    </div>
+    <!-- Camera Tab -->
+    <div id="photoTabCamera" style="display:none">
+      <div class="camera-preview-wrap" id="cameraWrap">
+        <video id="cameraVideo" autoplay playsinline style="display:none"></video>
+        <canvas id="cameraCanvas" style="display:none"></canvas>
+        <div id="cameraPlaceholder" style="color:#aaa;font-size:.85rem;text-align:center;padding:30px">
+          <div style="font-size:2rem;margin-bottom:8px">📷</div>
+          <div>Click "Start Camera" to begin</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:center;margin-bottom:10px">
+        <button class="btn btn-outline btn-sm" id="startCamBtn" onclick="startCamera()">▶️ Start Camera</button>
+        <button class="btn btn-primary btn-sm" id="snapBtn" style="display:none" onclick="snapPhoto()">📸 Take Photo</button>
+        <button class="btn btn-danger btn-sm" id="retakeBtn" style="display:none" onclick="retakePhoto()">🔄 Retake</button>
+      </div>
+    </div>
+    <div id="photoUpdateCaption" style="font-size:.78rem;color:var(--gray-500);text-align:center;margin-top:4px"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-primary" id="savePhotoBtn" onclick="saveUpdatedPhoto()">💾 Save Photo</button>
+    <button class="btn btn-outline btn-sm" onclick="closePhotoUpdateModal()">Cancel</button>
+  </div>
+</div></div>
+
+<!-- DOCUMENTS MODAL -->
+<div class="modal-overlay" id="documentsModal"><div class="modal modal-lg">
+  <div class="modal-header"><h3 id="documentsModalTitle">📁 Keke Documents</h3><button class="btn-close" onclick="closeDocumentsModal()">✕</button></div>
+  <div class="modal-body">
+    <div class="info-box"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Upload and store digital copies of keke documents — Registration, Insurance, Roadworthiness, C-of-O, any other official papers.</p></div>
+    <div class="doc-upload-area" onclick="document.getElementById('docFileInput').click()" style="margin-bottom:18px">
+      <input type="file" id="docFileInput" multiple accept="image/*,.pdf,.doc,.docx" style="display:none;position:absolute" onchange="handleDocUpload(this)">
+      <div class="du-icon">📎</div>
+      <div class="du-label">Click to upload documents</div>
+      <div class="du-sub">Images, PDFs — multiple files allowed</div>
+    </div>
+    <div style="font-size:.74rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Stored Documents</div>
+    <div id="documentsList"><div class="empty-state" style="padding:20px 0"><p>No documents uploaded yet.</p></div></div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-outline btn-sm" onclick="closeDocumentsModal()">Close</button></div>
+</div></div>
+
+<!-- AUTO LOGOUT WARNING -->
+<div id="autoLogoutWarning" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#212529;color:white;padding:14px 22px;border-radius:12px;font-size:.85rem;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.3);display:none;align-items:center;gap:12px">
+  <span>⏱️ Session expires in <strong id="autoLogoutCountdown">60</strong>s due to inactivity</span>
+  <button onclick="resetInactivityTimer()" style="background:var(--green);color:white;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.82rem;font-weight:600">Stay Logged In</button>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+<script src="app.js"></script>
+<script>
+// Bootstrap Supabase on page load
+window.addEventListener("load", () => { bootstrap().catch(console.error); });
+</script>
+</body>
+</html>
