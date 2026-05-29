@@ -76,7 +76,7 @@
 
     /* STATS */
     .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:18px;margin-bottom:28px}
-    .stat-card{background:var(--white);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow-sm);border:1px solid var(--gray-100);position:relative;overflow:hidden;transition:transform .2s,box-shadow .2s}
+    .stat-card{background:var(--white);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow-sm);border:1px solid var(--gray-100);position:relative;overflow:hidden;cursor:pointer;transition:transform .15s,box-shadow .15s}
     .stat-card:hover{transform:translateY(-2px);box-shadow:var(--shadow)}
     .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--green)}
     .stat-card.red::before{background:var(--red)}
@@ -385,8 +385,13 @@
 .stat-card.green { background:linear-gradient(135deg,#dcfce7,#bbf7d0); }
 .stat-card.green .stat-icon { background:rgba(26,122,60,.12); }
 .stat-card.green .stat-value,.stat-card.green .stat-label { color:#166534; }
-.stat-card { cursor:pointer;transition:transform .15s,box-shadow .15s; }
 .stat-card:hover { transform:translateY(-2px);box-shadow:var(--shadow-lg); }
+
+/* ── OVERPAYMENT ─────────────────────────────────────────── */
+.pay-over-row { background:#f0fdf4; }
+.pay-over { color:#1a7a3c; font-weight:700; }
+.pay-over-tag { display:inline-block;margin-left:6px;background:#dcfce7;color:#15803d;font-size:.72rem;font-weight:700;padding:1px 7px;border-radius:20px;border:1px solid #bbf7d0;vertical-align:middle; }
+.pi-amount .pay-over-tag { font-size:.68rem; }
 
 /* ── SERVICE & MAINTENANCE ─────────────────────────────── */
 .maint-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:18px; }

@@ -149,7 +149,7 @@ function setSyncStatus(status) {
 const CACHE = { kekes:null, payments:null, complaints:null, serviceRecords:null, documents:null, activityLog:null, holiday:null, batchSchedules:null };
 
 function _mapKeke(r) { if(!r)return null; return { ...r, total_loan:r.total_loan??0, installment_amount:r.installment_amount??0 }; }
-function _mapPayment(r) { if(!r)return null; return { ...r, balance_after:r.balance_after??0, is_short:r.is_short??false, expected_amount:r.expected_amount??0 }; }
+function _mapPayment(r) { if(!r)return null; return { ...r, balance_after:r.balance_after??0, is_short:r.is_short??false, expected_amount:r.expected_amount??0, overpay_amount:r.overpay_amount??0 }; }
 function _mapDoc(r) { if(!r)return null; return { ...r, dataUrl: r.data_url||r.dataUrl, data_url: r.data_url||r.dataUrl }; }
 
 // ─── Bootstrap: load all data from Supabase once ─────────────
@@ -254,7 +254,6 @@ function exportBackup() {
     holiday:         LOCAL.getHoliday(),
     service_records: LOCAL.getServiceRecords(),
     batch_schedules: LOCAL.getBatchSchedules(),
-    documents:       LOCAL.getDocuments(),
     documents:       LOCAL.getDocuments()
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
@@ -289,9 +288,15 @@ function importBackup(input) {
       toast('Pushing backup data to Supabase…');
       (async()=>{
         try{
-          for(const k of CACHE.kekes) await sb.upsert('keke_loans',k).catch(()=>{});
-          for(const p of CACHE.payments) await sb.upsert('keke_payments',p).catch(()=>{});
-          if(data.holiday) await sb.saveSetting('holiday',data.holiday).catch(()=>{});
+          for(const k of CACHE.kekes)         await sb.upsert('keke_loans',k).catch(()=>{});
+          for(const p of CACHE.payments)      await sb.upsert('keke_payments',p).catch(()=>{});
+          for(const c of (CACHE.complaints||[])) await sb.upsert('keke_complaints',c).catch(()=>{});
+          for(const r of (CACHE.serviceRecords||[])) await sb.upsert('keke_service_records',r).catch(()=>{});
+          for(const d of (CACHE.documents||[])){
+            const row={...d,data_url:d.dataUrl||d.data_url};delete row.dataUrl;
+            await sb.upsert('keke_documents',row).catch(()=>{});
+          }
+          if(data.holiday)         await sb.saveSetting('holiday',data.holiday).catch(()=>{});
           if(data.batch_schedules) await sb.saveSetting('batch_schedules',data.batch_schedules).catch(()=>{});
           toast('Backup synced to Supabase ☁️');
         }catch(e){toast('Supabase sync failed: '+e.message,'error');}
@@ -915,7 +920,13 @@ async function renderPayments(){
   const tbody=document.getElementById('paymentsTable');
   if(!payments.length){tbody.innerHTML='<tr><td colspan="8"><div class="empty-state"><p>No payments found</p></div></td></tr>';return;}
   const actionsCol=isAdmin()?(id=>`<button class="btn btn-outline btn-sm" onclick="openEditPaymentModal('${id}')">✏️</button> <button class="btn btn-danger btn-sm" onclick="deletePaymentById('${id}')">🗑️</button>`):()=>'';
-  tbody.innerHTML=payments.map(p=>`<tr class="${p.is_short?'pay-short-row':''}"><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td><strong>${p.driver_name}</strong></td><td><span class="badge badge-gray">${p.plate}</span></td><td>${batchBadge(p.batch)}</td><td class="${p.is_short?'pay-short':''}" style="font-weight:700">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`).join('');
+  tbody.innerHTML=payments.map(p=>{
+    const hasOver=p.overpay_amount>0;
+    const amountCell=hasOver
+      ?`<span style="font-weight:700">${fmt(p.expected_amount)}</span><span class="pay-over-tag">+${fmt(p.overpay_amount)}</span>`
+      :`${fmt(p.amount)}${p.is_short?' ⚠️':''}`;
+    return`<tr class="${p.is_short?'pay-short-row':hasOver?'pay-over-row':''}"><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td><strong>${p.driver_name}</strong></td><td><span class="badge badge-gray">${p.plate}</span></td><td>${batchBadge(p.batch)}</td><td class="${p.is_short?'pay-short':hasOver?'pay-over':''}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
+  }).join('');
 }
 async function deletePaymentById(payId){if(!isAdmin()){toast('Admin access required','error');return;}if(!confirm('Delete this payment?'))return;editingPaymentId=payId;await deletePayment();}
 
@@ -927,9 +938,10 @@ async function renderCompleted(){const kekes=(await dbGetKekes()).filter(k=>k.st
 // ═══════════════════════════════════════════════════════════════
 //  PAYMENT MODAL
 // ═══════════════════════════════════════════════════════════════
-let currentKekeId=null, _currentInstallment=0;
+let currentKekeId=null, _currentInstallment=0, _savingPayment=false;
 async function openPaymentModal(id){
   currentKekeId=id;
+  _savingPayment=false; // always reset on open
   const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===id); if(!k)return;
   _currentInstallment=k.installment_amount||0;
   document.getElementById('pmTitle').textContent=`Record Payment — ${k.driver_name} (${k.plate})`;
@@ -937,30 +949,46 @@ async function openPaymentModal(id){
   document.getElementById('pm_date').valueAsDate=new Date();
   document.getElementById('pm_note').value='';
   document.getElementById('pmShortWarning').style.display='none';
+  document.getElementById('pmOverWarning').style.display='none';
   const bal=k.total_loan-k.paid;
   document.getElementById('pmLoanSummary').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center"><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Expected</div><div style="font-weight:800;color:var(--gray-800)">${fmt(k.installment_amount)}</div></div><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Paid So Far</div><div style="font-weight:800;color:var(--green)">${fmt(k.paid)}</div></div><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Balance</div><div style="font-weight:800;color:var(--red)">${fmt(bal)}</div></div></div>`;
   document.getElementById('paymentModal').classList.add('active');
 }
-function checkShortPayment(input){const v=parseFloat(input.value)||0;document.getElementById('pmShortWarning').style.display=(v>0&&v<_currentInstallment)?'':'none';}
-function closePaymentModal(){document.getElementById('paymentModal').classList.remove('active');currentKekeId=null;}
+function checkShortPayment(input){
+  const v=parseFloat(input.value)||0;
+  const shortWarn=document.getElementById('pmShortWarning');
+  const overWarn=document.getElementById('pmOverWarning');
+  shortWarn.style.display=(v>0&&v<_currentInstallment)?'':'none';
+  if(v>0&&v>_currentInstallment){
+    const extra=v-_currentInstallment;
+    document.getElementById('pmOverExtra').textContent='₦'+Number(extra).toLocaleString('en-NG');
+    overWarn.style.display='';
+  } else {
+    overWarn.style.display='none';
+  }
+}
+function closePaymentModal(){document.getElementById('paymentModal').classList.remove('active');currentKekeId=null;_savingPayment=false;}
 
 async function savePayment(){
+  if(_savingPayment)return; // prevent double-click
+  _savingPayment=true;
   const amount=parseFloat(document.getElementById('pm_amount').value)||0;
   const date=document.getElementById('pm_date').value;
   const note=document.getElementById('pm_note').value.trim();
-  if(!amount||!date){toast('Enter amount and date.','error');return;}
+  if(!amount||!date){toast('Enter amount and date.','error');_savingPayment=false;return;}
   const btn=document.getElementById('savePayBtn'); btn.innerHTML='<div class="spinner"></div> Saving...'; btn.disabled=true;
   try{
     const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===currentKekeId); if(!k)throw new Error('Keke not found');
     const isShort=amount<k.installment_amount;
+    const overpayAmount=Math.max(0,amount-k.installment_amount);
     const actual=Math.min(amount,k.total_loan-k.paid),newPaid=k.paid+actual,newBal=k.total_loan-newPaid,isComplete=newBal<=0;
     await dbUpdateKeke(k.id,{paid:newPaid,status:isComplete?'completed':'active',completed_at:isComplete?new Date().toISOString():null});
-    await dbSavePayment({id:uid(),keke_id:k.id,plate:k.plate,driver_name:k.driver_name,batch:k.batch,amount:actual,balance_after:Math.max(0,newBal),payment_date:date,note,is_short:isShort,expected_amount:k.installment_amount,recorded_at:new Date().toISOString()});
-    logActivity(`Payment: ${k.plate}`,'payment',`Driver: ${k.driver_name} | ${fmt(actual)}${isShort?' [SHORT]':''} | Bal: ${fmt(Math.max(0,newBal))} | By: ${currentUser?.name||'?'}`);
+    await dbSavePayment({id:uid(),keke_id:k.id,plate:k.plate,driver_name:k.driver_name,batch:k.batch,amount:actual,balance_after:Math.max(0,newBal),payment_date:date,note,is_short:isShort,expected_amount:k.installment_amount,overpay_amount:overpayAmount,recorded_at:new Date().toISOString()});
+    logActivity(`Payment: ${k.plate}`,'payment',`Driver: ${k.driver_name} | ${fmt(actual)}${isShort?' [SHORT]':overpayAmount>0?' [OVER +'+fmt(overpayAmount)+']':''} | Bal: ${fmt(Math.max(0,newBal))} | By: ${currentUser?.name||'?'}`);
     closePaymentModal();
     if(isComplete){toast(`🎉 FULLY PAID! Keke ${k.plate} belongs to ${k.driver_name}!`);setTimeout(()=>showView('completed'),700);}
-    else{toast(`Payment of ${fmt(actual)} recorded.${isShort?' ⚠️ Short payment.':''}`);renderDrivers();}
-  }catch(e){toast('Error: '+e.message,'error');}
+    else{toast(`Payment of ${fmt(actual)} recorded.${isShort?' ⚠️ Short payment.':overpayAmount>0?' 💚 Includes '+fmt(overpayAmount)+' extra.':''}`);renderDrivers();}
+  }catch(e){toast('Error: '+e.message,'error');_savingPayment=false;}
   finally{btn.innerHTML='<svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Record Payment';btn.disabled=false;}
 }
 
@@ -978,7 +1006,7 @@ function renderComplaintList(){
   const catLabel={payment:'💳 Payment Issue',behaviour:'😤 Behaviour',accident:'🔧 Accident/Damage',missing:'❓ Missing/No Contact',other:'📌 Other'};
   container.innerHTML=`<div style="font-size:.76rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${comps.length} Record(s)</div>`+comps.map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><div style="display:flex;align-items:center;gap:8px"><span class="comp-date">${new Date(c.date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</span>${isAdmin()?`<button class="comp-del" onclick="deleteComplaint('${c.id}')">✕</button>`:''}</div></div><div class="comp-text">${c.text}</div>${c.recorded_by?`<div style="font-size:.71rem;color:var(--gray-400);margin-top:4px">By: ${c.recorded_by}</div>`:''}</div>`).join('');
 }
-function saveComplaint(){const text=document.getElementById('comp_text').value.trim();const date=document.getElementById('comp_date').value;const category=document.getElementById('comp_category').value;if(!text||!date){toast('Enter complaint text and date.','error');return;}const c={id:uid(),keke_id:currentComplaintKekeId,text,date,category,recorded_by:currentUser?.name||'?',created_at:new Date().toISOString()};LOCAL.getComplaints().unshift(c);_sbSaveComplaint(c);const k=LOCAL.getKekes().find(x=>x.id===currentComplaintKekeId);logActivity(`Complaint: ${k?.plate||''}`,'complaint',`Driver: ${k?.driver_name||''} | ${category} | ${text.slice(0,50)} | By: ${currentUser?.name||'?'}`);document.getElementById('comp_text').value='';renderComplaintList();toast('Complaint recorded.');}
+function saveComplaint(){const text=document.getElementById('comp_text').value.trim();const date=document.getElementById('comp_date').value;const category=document.getElementById('comp_category').value;if(!text||!date){toast('Enter complaint text and date.','error');return;}const c={id:uid(),keke_id:currentComplaintKekeId,text,date,category,recorded_by:currentUser?.name||'?',created_at:new Date().toISOString()};_sbSaveComplaint(c);const k=LOCAL.getKekes().find(x=>x.id===currentComplaintKekeId);logActivity(`Complaint: ${k?.plate||''}`,'complaint',`Driver: ${k?.driver_name||''} | ${category} | ${text.slice(0,50)} | By: ${currentUser?.name||'?'}`);document.getElementById('comp_text').value='';renderComplaintList();toast('Complaint recorded.');}
 function deleteComplaint(compId){if(!isAdmin()){toast('Admin access required.','error');return;}if(!confirm('Delete this complaint?'))return;CACHE.complaints=(CACHE.complaints||[]).filter(c=>c.id!==compId);_sbDeleteComplaint(compId);renderComplaintList();toast('Deleted.','error');}
 
 // ═══════════════════════════════════════════════════════════════
@@ -1018,7 +1046,31 @@ let editingKekeId=null;
 async function openEditKekeModal(id){if(!isAdmin()){toast('Admin access required.','error');return;}const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===id);if(!k)return;editingKekeId=id;document.getElementById('editKekeTitle').textContent=`Edit — ${k.plate} (${k.driver_name})`;const f={ek_plate:'plate',ek_pt:'pt_number',ek_desc:'description',ek_chassis:'chassis_number',ek_engine:'engine_number'};Object.entries(f).forEach(([el,kk])=>document.getElementById(el).value=k[kk]||'');document.getElementById('ek_year').value='';document.getElementById('ek_cost').value=k.cost||'';document.getElementById('ek_total').value=k.total_loan||'';document.getElementById('ek_paid').value=k.paid||'';document.getElementById('ek_inst').value=k.installment_amount||'';document.getElementById('ek_schedule').value=k.schedule||'daily';document.getElementById('ek_batch').value=k.batch||'';document.getElementById('ek_start').value=k.start_date||'';document.getElementById('ek_status').value=k.status||'active';document.getElementById('ek_shorty').value=k.shorty_name||'';document.getElementById('ek_shorty_phone').value=k.shorty_phone||'';document.getElementById('ek_shorty_address').value=k.shorty_address||'';document.getElementById('ek_driver').value=k.driver_name||'';document.getElementById('ek_phone').value=k.driver_phone||'';document.getElementById('ek_phone2').value=k.driver_alt_phone||'';document.getElementById('ek_address').value=k.driver_address||'';document.getElementById('ek_guarantor').value=k.guarantor_name||'';document.getElementById('ek_gphone').value=k.guarantor_phone||'';document.getElementById('ek_grel').value=k.guarantor_relationship||'';document.getElementById('ek_gaddress').value=k.guarantor_address||'';document.getElementById('ek_notes').value=k.notes||'';document.getElementById('editKekeModal').classList.add('active');}
 function closeEditKekeModal(){document.getElementById('editKekeModal').classList.remove('active');editingKekeId=null;}
 async function saveEditKeke(){if(!editingKekeId)return;const plate=document.getElementById('ek_plate').value.trim().toUpperCase(),driver=document.getElementById('ek_driver').value.trim(),phone=document.getElementById('ek_phone').value.trim();if(!plate||!driver||!phone){toast('Plate, driver name and phone required.','error');return;}const btn=document.getElementById('saveEditKekeBtn');btn.innerHTML='<div class="spinner"></div> Saving...';btn.disabled=true;try{const newPaid=parseFloat(document.getElementById('ek_paid').value)||0,newTotal=parseFloat(document.getElementById('ek_total').value)||0,newStatus=document.getElementById('ek_status').value;const updates={plate,pt_number:document.getElementById('ek_pt').value.trim(),description:document.getElementById('ek_desc').value.trim(),chassis_number:document.getElementById('ek_chassis').value.trim(),engine_number:document.getElementById('ek_engine').value.trim(),cost:parseFloat(document.getElementById('ek_cost').value)||0,total_loan:newTotal,paid:newPaid,status:newStatus,installment_amount:parseFloat(document.getElementById('ek_inst').value)||0,schedule:document.getElementById('ek_schedule').value,batch:document.getElementById('ek_batch').value,start_date:document.getElementById('ek_start').value,shorty_name:document.getElementById('ek_shorty').value.trim(),shorty_phone:document.getElementById('ek_shorty_phone').value.trim(),shorty_address:document.getElementById('ek_shorty_address').value.trim(),driver_name:driver,driver_phone:phone,driver_alt_phone:document.getElementById('ek_phone2').value.trim(),driver_address:document.getElementById('ek_address').value.trim(),guarantor_name:document.getElementById('ek_guarantor').value.trim(),guarantor_phone:document.getElementById('ek_gphone').value.trim(),guarantor_relationship:document.getElementById('ek_grel').value,guarantor_address:document.getElementById('ek_gaddress').value.trim(),notes:document.getElementById('ek_notes').value.trim(),completed_at:newStatus==='completed'?new Date().toISOString():null};await dbUpdateKeke(editingKekeId,updates);logActivity(`Edited: ${plate}`,'edit',`Driver: ${driver} | Batch ${updates.batch} | Status: ${newStatus} | By: ${currentUser?.name||'?'}`);toast(`Keke ${plate} updated.`);closeEditKekeModal();closeDetailModal();renderDrivers();}catch(e){toast('Error: '+e.message,'error');}finally{btn.innerHTML='Save Changes';btn.disabled=false;}}
-async function deleteKeke(){if(!isAdmin()){toast('Admin access required.','error');return;}if(!editingKekeId)return;const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===editingKekeId);if(!k)return;if(!confirm(`⚠️ Permanently delete ${k.plate} (${k.driver_name}) and ALL records?\n\nThis cannot be undone.`))return;try{CACHE.kekes=(CACHE.kekes||[]).filter(x=>x.id!==editingKekeId);CACHE.payments=(CACHE.payments||[]).filter(p=>p.keke_id!==editingKekeId);CACHE.complaints=(CACHE.complaints||[]).filter(c=>c.keke_id!==editingKekeId);sb.delete('keke_loans',`id=eq.${editingKekeId}`).catch(e=>console.error(e));logActivity(`Deleted: ${k.plate}`,'delete',`Driver: ${k.driver_name} | By: ${currentUser?.name||'?'}`);toast(`Keke ${k.plate} deleted.`,'error');closeEditKekeModal();closeDetailModal();renderDrivers();}catch(e){toast('Error: '+e.message,'error');}}
+async function deleteKeke(){
+  if(!isAdmin()){toast('Admin access required.','error');return;}
+  if(!editingKekeId)return;
+  const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===editingKekeId);if(!k)return;
+  if(!confirm(`⚠️ Permanently delete ${k.plate} (${k.driver_name}) and ALL records?\n\nThis cannot be undone.`))return;
+  try{
+    // Clear cache first
+    CACHE.kekes=(CACHE.kekes||[]).filter(x=>x.id!==editingKekeId);
+    CACHE.payments=(CACHE.payments||[]).filter(p=>p.keke_id!==editingKekeId);
+    CACHE.complaints=(CACHE.complaints||[]).filter(c=>c.keke_id!==editingKekeId);
+    CACHE.serviceRecords=(CACHE.serviceRecords||[]).filter(r=>r.keke_id!==editingKekeId);
+    CACHE.documents=(CACHE.documents||[]).filter(d=>d.keke_id!==editingKekeId);
+    // Cascade delete in Supabase
+    await Promise.all([
+      sb.delete('keke_payments',`keke_id=eq.${editingKekeId}`).catch(e=>console.error('del payments',e)),
+      sb.delete('keke_complaints',`keke_id=eq.${editingKekeId}`).catch(e=>console.error('del complaints',e)),
+      sb.delete('keke_service_records',`keke_id=eq.${editingKekeId}`).catch(e=>console.error('del svc',e)),
+      sb.delete('keke_documents',`keke_id=eq.${editingKekeId}`).catch(e=>console.error('del docs',e)),
+    ]);
+    await sb.delete('keke_loans',`id=eq.${editingKekeId}`).catch(e=>console.error('del keke',e));
+    logActivity(`Deleted: ${k.plate}`,'delete',`Driver: ${k.driver_name} | By: ${currentUser?.name||'?'}`);
+    toast(`Keke ${k.plate} deleted.`,'error');
+    closeEditKekeModal();closeDetailModal();renderDrivers();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  EDIT PAYMENT (admin only)
@@ -1026,7 +1078,31 @@ async function deleteKeke(){if(!isAdmin()){toast('Admin access required.','error
 let editingPaymentId=null;
 async function openEditPaymentModal(payId){if(!isAdmin()){toast('Admin access required.','error');return;}let payments=await dbGetPayments();const p=payments.find(x=>x.id===payId);if(!p)return;editingPaymentId=payId;document.getElementById('ep_amount').value=p.amount||'';document.getElementById('ep_date').value=p.payment_date||'';document.getElementById('ep_balance').value=p.balance_after||'';document.getElementById('ep_note').value=p.note||'';document.getElementById('editPaymentModal').classList.add('active');}
 function closeEditPaymentModal(){document.getElementById('editPaymentModal').classList.remove('active');editingPaymentId=null;}
-async function saveEditPayment(){if(!editingPaymentId)return;const amount=parseFloat(document.getElementById('ep_amount').value)||0,date=document.getElementById('ep_date').value;if(!amount||!date){toast('Amount and date required.','error');return;}const btn=document.getElementById('saveEditPayBtn');btn.textContent='Saving...';btn.disabled=true;try{const updates={amount,payment_date:date,balance_after:parseFloat(document.getElementById('ep_balance').value)||0,note:document.getElementById('ep_note').value.trim()};const idx=(CACHE.payments||[]).findIndex(x=>x.id===editingPaymentId);if(idx>=0){CACHE.payments[idx]={...CACHE.payments[idx],...updates};}sb.update('keke_payments',`id=eq.${editingPaymentId}`,updates).catch(e=>console.error(e));logActivity('Edited payment','edit',`${fmt(amount)} | ${date} | By: ${currentUser?.name||'?'}`);toast('Payment updated.');closeEditPaymentModal();renderPayments();}catch(e){toast('Error: '+e.message,'error');}finally{btn.textContent='Save Changes';btn.disabled=false;}}
+async function saveEditPayment(){
+  if(!editingPaymentId)return;
+  const amount=parseFloat(document.getElementById('ep_amount').value)||0,date=document.getElementById('ep_date').value;
+  if(!amount||!date){toast('Amount and date required.','error');return;}
+  const btn=document.getElementById('saveEditPayBtn');btn.textContent='Saving...';btn.disabled=true;
+  try{
+    const updates={amount,payment_date:date,balance_after:parseFloat(document.getElementById('ep_balance').value)||0,note:document.getElementById('ep_note').value.trim()};
+    // Update Supabase first — properly awaited
+    await sb.update('keke_payments',`id=eq.${editingPaymentId}`,updates);
+    // Update cache
+    const idx=(CACHE.payments||[]).findIndex(x=>x.id===editingPaymentId);
+    if(idx>=0) CACHE.payments[idx]={...CACHE.payments[idx],...updates};
+    // Recalculate keke paid total from all payments
+    const editedPay=CACHE.payments[idx>=0?idx:0];
+    if(editedPay?.keke_id){
+      const kekeId=editedPay.keke_id;
+      const allKekePays=(CACHE.payments||[]).filter(p=>p.keke_id===kekeId);
+      const newTotalPaid=allKekePays.reduce((s,p)=>s+Number(p.amount),0);
+      await dbUpdateKeke(kekeId,{paid:newTotalPaid});
+    }
+    logActivity('Edited payment','edit',`${fmt(amount)} | ${date} | By: ${currentUser?.name||'?'}`);
+    toast('Payment updated.');closeEditPaymentModal();renderPayments();
+  }catch(e){toast('Error: '+e.message,'error');}
+  finally{btn.textContent='Save Changes';btn.disabled=false;}
+}
 async function deletePayment(){if(!isAdmin()){toast('Admin access required.','error');return;}if(!editingPaymentId)return;if(!confirm('Delete this payment?'))return;try{const all=LOCAL.getPayments();const p=all.find(x=>x.id===editingPaymentId)||{};await dbDeletePayment(editingPaymentId);logActivity('Deleted payment','delete',`Driver: ${p.driver_name||''} | ${fmt(p.amount)} | By: ${currentUser?.name||'?'}`);toast('Payment deleted.','error');closeEditPaymentModal();renderPayments();}catch(e){toast('Error: '+e.message,'error');}}
 
 // ═══════════════════════════════════════════════════════════════
@@ -1069,7 +1145,7 @@ async function openDetail(id){
     <div class="section-divider" style="margin:16px 0 10px"><span>📋 Complaints (${complaints.length})</span></div>
     ${complaints.length?'<div style="display:flex;flex-direction:column;gap:7px">'+complaints.slice(0,3).map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><span class="comp-date">${new Date(c.date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</span></div><div class="comp-text">${c.text}</div></div>`).join('')+(complaints.length>3?`<button class="btn btn-outline btn-sm" onclick="closeDetailModal();openComplaintModal('${k.id}')">View all ${complaints.length} complaints</button>`:'')+'</div>':'<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No complaints recorded.</div>'}
     <div class="section-divider" style="margin:16px 0 10px"><span>Payment History (${payments.length})</span></div>
-    ${!payments.length?'<div class="empty-state" style="padding:16px 0"><p>No payments yet</p></div>':'<div class="payment-log">'+payments.map(py=>`<div class="payment-item"><div><div class="pi-amount${py.is_short?' pay-short':''}">${fmt(py.amount)}${py.is_short?' ⚠️':''}</div><div class="pi-note">${py.note||'Payment recorded'}</div></div><div class="pi-date">${new Date(py.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</div></div>`).join('')+'</div>'}
+    ${!payments.length?'<div class="empty-state" style="padding:16px 0"><p>No payments yet</p></div>':'<div class="payment-log">'+payments.map(py=>{const hasOver=py.overpay_amount>0;return`<div class="payment-item"><div><div class="pi-amount${py.is_short?' pay-short':hasOver?' pay-over':''}">${hasOver?`${fmt(py.expected_amount)}<span class="pay-over-tag">+${fmt(py.overpay_amount)}</span>`:fmt(py.amount)}${py.is_short?' ⚠️':''}</div><div class="pi-note">${py.note||'Payment recorded'}</div></div><div class="pi-date">${new Date(py.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</div></div>`;}).join('')+'</div>'}
     <div class="section-divider" style="margin:16px 0 10px"><span>📁 Keke Documents (${docs.length})</span><button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openDocumentsModal('${k.id}')">➕ Add Document</button></div>
     <div id="dmDocList">${renderDocList(docs, k.id)}</div>`;
   document.getElementById('detailModal').classList.add('active');
@@ -1079,7 +1155,7 @@ function closeDetailModal(){document.getElementById('detailModal').classList.rem
 function renderDocList(docs, kekeId) {
   if(!docs.length) return '<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No documents uploaded yet. Click ➕ Add Document above to upload keke papers, permits, IDs etc.</div>';
   const typeIcon = t => /jpg|jpeg|png|gif|webp/.test(t||'')?'🖼️':t==='pdf'||t?.includes('pdf')?'📄':t?.includes('doc')?'📝':'📎';
-  return '<div class="doc-list">'+docs.map(d=>`<div class="doc-item"><div class="doc-icon">${typeIcon(d.type||d.name)}</div><div class="doc-info"><div class="doc-name">${d.name||'Document'}</div><div class="doc-meta">${d.type||''} · Uploaded ${new Date(d.uploaded_at).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})} by ${d.uploaded_by||'?'}</div></div><div class="doc-actions"><a href="${d.dataUrl||d.data}" download="${d.name||'document'}" class="btn btn-primary btn-sm" style="text-decoration:none">⬇️</a>${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocAndRefresh('${d.id}','${kekeId}')">✕</button>`:''}</div></div>`).join('')+'</div>';
+  return '<div class="doc-list">'+docs.map(d=>`<div class="doc-item"><div class="doc-icon">${typeIcon(d.type||d.name)}</div><div class="doc-info"><div class="doc-name">${d.name||'Document'}</div><div class="doc-meta">${d.type||''} · Uploaded ${new Date(d.uploaded_at).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})} by ${d.uploaded_by||'?'}</div></div><div class="doc-actions"><a href="${d.dataUrl||d.data_url}" download="${d.name||'document'}" class="btn btn-primary btn-sm" style="text-decoration:none">⬇️</a>${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocAndRefresh('${d.id}','${kekeId}')">✕</button>`:''}</div></div>`).join('')+'</div>';
 }
 function deleteDocAndRefresh(docId, kekeId) {
   if(!isAdmin()){toast('Admin access required.','error');return;}
@@ -1154,11 +1230,12 @@ function getBatchPaymentDates(batch, numDates) {
   if(!bs || !bs.startDate) return [];
   const start = new Date(bs.startDate);
   if(isNaN(start.getTime())) return [];
+  const intervalDays = bs.intervalDays || 3; // default 3, configurable
   const dates = [];
   let current = new Date(start);
   for(let i=0; i<numDates; i++){
     dates.push(current.toISOString().slice(0,10));
-    current.setDate(current.getDate()+3); // every 3 days
+    current.setDate(current.getDate()+intervalDays);
   }
   return dates;
 }
@@ -1348,10 +1425,7 @@ function saveServiceRecord() {
   const mechanic = document.getElementById('svc_mechanic').value.trim();
   const notes = document.getElementById('svc_notes').value.trim();
   if(!date){toast('Service date required.','error');return;}
-  const all = LOCAL.getServiceRecords();
   const svcEntry={id:uid(),keke_id:currentServiceKekeId,date,condition,serviced,mechanic,notes,recorded_by:currentUser?.name||'?',created_at:new Date().toISOString()};
-  CACHE.serviceRecords=(CACHE.serviceRecords||[]);
-  CACHE.serviceRecords.unshift(svcEntry);
   _sbSaveServiceRecord(svcEntry);
   const k = LOCAL.getKekes().find(x=>x.id===currentServiceKekeId);
   logActivity(`Service logged: ${k?.plate||''}`, 'edit', `Driver: ${k?.driver_name||''} | Condition: ${condition} | Serviced: ${serviced} | By: ${currentUser?.name||'?'}`);
@@ -1429,9 +1503,9 @@ async function handleDocUpload(input) {
   let count=0;
   for(const file of files){
     const dataUrl = await new Promise(res=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(file);});
-    const all = LOCAL.getDocuments();
-    all.unshift({id:uid(),keke_id:currentDocsKekeId,name:file.name,type:file.type,size:file.size,dataUrl,uploaded_by:currentUser?.name||'?',uploaded_at:new Date().toISOString()});
-    _sbSaveDocument({id:uid(),keke_id:currentDocsKekeId,name:file.name,type:file.type,size:file.size,dataUrl,uploaded_by:currentUser?.name||'?',uploaded_at:new Date().toISOString()});
+    const docId = uid();
+    const docEntry = {id:docId,keke_id:currentDocsKekeId,name:file.name,type:file.type,size:file.size,dataUrl,uploaded_by:currentUser?.name||'?',uploaded_at:new Date().toISOString()};
+    _sbSaveDocument(docEntry);
     count++;
   }
   const k=LOCAL.getKekes().find(x=>x.id===currentDocsKekeId);

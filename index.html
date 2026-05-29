@@ -468,6 +468,7 @@
     <div id="pmLoanSummary" style="background:var(--gray-50);border-radius:var(--radius-sm);padding:14px;margin-bottom:18px"></div>
     <div class="form-group"><label>Amount Paid (₦) *</label><input type="number" id="pm_amount" class="form-control" placeholder="Enter amount" oninput="checkShortPayment(this)"></div>
     <div id="pmShortWarning" style="display:none;background:#fff3cd;border:1px solid #ffc107;border-radius:var(--radius-sm);padding:10px 14px;font-size:.82rem;color:#856404;margin-bottom:10px">⚠️ Amount is less than expected installment — will be marked as <strong>short payment</strong> (shown in orange).</div>
+    <div id="pmOverWarning" style="display:none;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:var(--radius-sm);padding:10px 14px;font-size:.82rem;color:#065f46;margin-bottom:10px">💚 Amount exceeds the agreed installment — <strong>₦<span id="pmOverExtra">0</span></strong> extra will be recorded as an overpayment and applied to the balance.</div>
     <div class="form-group"><label>Payment Date *</label><input type="date" id="pm_date" class="form-control"></div>
     <div class="form-group"><label>Note (Optional)</label><input type="text" id="pm_note" class="form-control" placeholder="e.g. Cash, bank transfer..."></div>
   </div>
@@ -618,7 +619,7 @@
 </div></div>
 
 <!-- AUTO LOGOUT WARNING -->
-<div id="autoLogoutWarning" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#212529;color:white;padding:14px 22px;border-radius:12px;font-size:.85rem;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.3);display:none;align-items:center;gap:12px">
+<div id="autoLogoutWarning" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#212529;color:white;padding:14px 22px;border-radius:12px;font-size:.85rem;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.3);align-items:center;gap:12px">
   <span>⏱️ Session expires in <strong id="autoLogoutCountdown">60</strong>s due to inactivity</span>
   <button onclick="resetInactivityTimer()" style="background:var(--green);color:white;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:.82rem;font-weight:600">Stay Logged In</button>
 </div>
