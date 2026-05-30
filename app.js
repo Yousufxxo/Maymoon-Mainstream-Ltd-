@@ -58,10 +58,12 @@ function applyRoleUI() {
     // Show everything for admin
     ['nav-activityLog','nav-section-analytics','nav-section-settings'].forEach(id => { const el=$(id); if(el) el.style.display=''; });
     if ($('payActionsHeader')) $('payActionsHeader').style.display = '';
+    ['stat-card-total-keke','stat-card-active','stat-card-completed'].forEach(id=>{ const el=$(id); if(el) el.style.display=''; });
   } else {
-    // Staff: hide Analytics section, Settings section, Activity Log, Actions column
+    // Staff: hide Analytics, Settings, Activity Log, Actions column, and 3 admin-only stat cards
     ['nav-section-analytics','nav-section-settings','nav-activityLog'].forEach(id => { const el=$(id); if(el) el.style.display='none'; });
     if ($('payActionsHeader')) $('payActionsHeader').style.display = 'none';
+    ['stat-card-total-keke','stat-card-active','stat-card-completed'].forEach(id=>{ const el=$(id); if(el) el.style.display='none'; });
   }
 }
 
@@ -814,6 +816,27 @@ async function saveKeke() {
 function callDriver(phone){if(!phone){toast('No phone number','error');return;}window.location.href='tel:'+phone;}
 function smsDriver(phone,name,plate,balance){if(!phone){toast('No phone number','error');return;}const msg=encodeURIComponent(`Hello ${name}, this is a reminder regarding your keke loan for vehicle ${plate}. Your outstanding balance is ${fmt(balance)}. Please make your payment as soon as possible. Thank you.`);window.location.href=`sms:${phone}?body=${msg}`;}
 
+async function quickChangeStatus(kekeId, newStatus) {
+  if(!isAdmin()){toast('Admin access required.','error');return;}
+  const kekes=await dbGetKekes();
+  const k=kekes.find(x=>x.id===kekeId);
+  if(!k){toast('Driver not found.','error');return;}
+  if(k.status===newStatus)return; // no change needed
+  const updates={status:newStatus};
+  if(newStatus==='completed'){
+    if(!confirm(`Mark ${k.driver_name} (${k.plate}) as COMPLETED? This means the loan is fully paid off.`))return;
+    updates.completed_at=new Date().toISOString();
+  } else {
+    updates.completed_at=null;
+  }
+  try{
+    await dbUpdateKeke(kekeId, updates);
+    logActivity(`Status changed: ${k.plate}`,'edit',`${k.driver_name}: ${k.status} → ${newStatus} | By: ${currentUser?.name||'?'}`);
+    toast(`${k.driver_name} status updated to ${newStatus}.`);
+    renderDrivers();
+  }catch(e){toast('Error saving status: '+e.message,'error');}
+}
+
 async function renderDrivers() {
   const grid=document.getElementById('kekeGrid');
   grid.innerHTML='<div class="empty-state"><p>Loading...</p></div>';
@@ -827,19 +850,33 @@ async function renderDrivers() {
   if(!kekes.length){grid.innerHTML='<div class="empty-state" style="grid-column:1/-1"><p>No kekes found</p></div>';return;}
   grid.innerHTML=kekes.map(k=>{
     const p=pct(k.paid,k.total_loan),bal=k.total_loan-k.paid,done=k.status==='completed';
+    const paused=k.status==='on_repair'||k.status==='repossession'||done;
     const avatarHtml=k.driver_photo_url?`<img src="${k.driver_photo_url}" class="keke-avatar" alt="${k.driver_name}">`:`<div class="keke-avatar-placeholder">👤</div>`;
     const editBtn=isAdmin()?`<button class="btn btn-primary btn-sm" onclick="openEditKekeModal('${k.id}')">✏️ Edit</button>`:'';
-    const payBtn=!done&&k.status!=='repossession'?`<button class="btn btn-primary btn-sm" onclick="openPaymentModal('${k.id}')"><svg style="width:11px;height:11px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Payment</button>`:(done?`<span class="badge badge-green" style="font-size:.7rem">Ownership ✓</span>`:'');
+    // Pay button — only shown for active drivers
+    const payBtn=!paused
+      ?`<button class="btn btn-primary btn-sm" onclick="openPaymentModal('${k.id}')"><svg style="width:11px;height:11px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Payment</button>`
+      :(done?`<span class="badge badge-green" style="font-size:.7rem">Ownership ✓</span>`:`<span class="badge badge-gray" style="font-size:.7rem">⏸ Paused</span>`);
     const repoBtn=isAdmin()&&k.status==='repossession'?`<button class="btn btn-danger btn-sm" onclick="openRepoModal('${k.id}')">🔄 Reassign</button>`:'';
     const breakTag=isOnBreak(k.batch)?`<span class="badge" style="background:#fef3c7;color:#92400e;font-size:.66rem">⏸️ Break</span>`:'';
+    // Admin status dropdown
+    const statusDropdown=isAdmin()?`<select class="status-quick-select" onchange="quickChangeStatus('${k.id}',this.value)" title="Change driver status">
+      <option value="active"${k.status==='active'?' selected':''}>🟢 Active</option>
+      <option value="on_repair"${k.status==='on_repair'?' selected':''}>🔧 On Repair</option>
+      <option value="repossession"${k.status==='repossession'?' selected':''}>🔴 Repossession</option>
+      <option value="completed"${k.status==='completed'?' selected':''}>✅ Completed</option>
+    </select>`:'';
     return `<div class="keke-card">
-      <div class="keke-card-header${done?' completed':''}">
+      <div class="keke-card-header${done?' completed':k.status==='on_repair'?' on-repair':k.status==='repossession'?' repo':''}">
         <div class="keke-plate">🛺 ${k.plate}${k.pt_number?` <span style="font-size:.72rem;opacity:.7">PT:${k.pt_number}</span>`:''}</div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${batchBadge(k.batch)} ${breakTag}</div>
       </div>
       <div class="keke-card-body">
-        ${statusBadge(k.status)}
-        <div class="keke-driver-row" style="margin-top:8px">${avatarHtml}<div><div class="keke-driver">${k.driver_name}</div><div class="keke-phone">📞 ${k.driver_phone}${k.driver_address?' · 📍 '+k.driver_address:''}</div>${k.shorty_name?`<div style="font-size:.73rem;color:#0369a1;margin-top:2px">🔗 ${k.shorty_name}</div>`:''}</div></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+          ${statusBadge(k.status)}
+          ${statusDropdown}
+        </div>
+        <div class="keke-driver-row" style="margin-top:4px">${avatarHtml}<div><div class="keke-driver">${k.driver_name}</div><div class="keke-phone">📞 ${k.driver_phone}${k.driver_address?' · 📍 '+k.driver_address:''}</div>${k.shorty_name?`<div style="font-size:.73rem;color:#0369a1;margin-top:2px">🔗 ${k.shorty_name}</div>`:''}</div></div>
         <div class="keke-amounts">
           <div class="keke-amt"><div class="al">Loan</div><div class="av">${fmt(k.total_loan)}</div></div>
           <div class="keke-amt"><div class="al">Paid</div><div class="av green">${fmt(k.paid)}</div></div>
@@ -943,6 +980,12 @@ async function openPaymentModal(id){
   currentKekeId=id;
   _savingPayment=false; // always reset on open
   const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===id); if(!k)return;
+  // Hard guard — payments paused for non-active drivers
+  if(k.status!=='active'){
+    const labels={on_repair:'🔧 On Repair',repossession:'🔴 Repossession',completed:'✅ Completed'};
+    toast(`Payments paused — ${k.driver_name} is currently ${labels[k.status]||k.status}.`,'error');
+    return;
+  }
   _currentInstallment=k.installment_amount||0;
   document.getElementById('pmTitle').textContent=`Record Payment — ${k.driver_name} (${k.plate})`;
   document.getElementById('pm_amount').value=k.installment_amount||'';
@@ -1641,4 +1684,4 @@ async function saveUpdatedPhoto() {
   // Refresh detail modal if open
   if(currentDetailKekeId===photoUpdateKekeId) openDetail(photoUpdateKekeId);
 }
-window.addEventListener('load', () => { setTopbarDate(); });
+window.addEventListener('load', () => { setTopbarDate(); bootstrap().catch(console.error); });
