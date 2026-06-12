@@ -1,45 +1,90 @@
 // ═══════════════════════════════════════════════════════════════
-//  AUTH & USERS
+//  AUTH & USERS — Supabase Auth
 // ═══════════════════════════════════════════════════════════════
 let currentUser = null;
-const USERS_KEY = 'maymoon_users';
 
-function getUsers() {
-  const saved = localStorage.getItem(USERS_KEY);
-  if (saved) return JSON.parse(saved);
-  return {
-    maimuna: { password: 'maimuna2024', name: 'Maimuna Aliyu', role: 'admin' },
-    staff:   { password: 'staff123',    name: 'Staff',         role: 'staff' }
-  };
-}
-function saveUsers(u) { localStorage.setItem(USERS_KEY, JSON.stringify(u)); }
+// Role map: define which Supabase email belongs to which role/name
+// Keys are lowercase emails. Add more as needed.
+const ROLE_MAP = {
+  'maimuna@maymoon.com': { name: 'Maimuna Aliyu', role: 'admin' },
+  'staff@maymoon.com':   { name: 'Staff',         role: 'staff' },
+};
+
 function isAdmin() { return currentUser && currentUser.role === 'admin'; }
 
-function doLogin() {
-  const u = document.getElementById('loginUsername').value.trim();
-  const p = document.getElementById('loginPassword').value;
-  const users = getUsers();
-  if (users[u] && users[u].password === p) {
-    currentUser = { username: u, ...users[u] };
+// ─── Password show/hide toggle ────────────────────────────────
+function togglePasswordVisibility() {
+  const input = document.getElementById('loginPassword');
+  const icon  = document.getElementById('pwEyeIcon');
+  if (!input) return;
+  const isHidden = input.type === 'password';
+  input.type = isHidden ? 'text' : 'password';
+  // Switch between eye and eye-off SVG paths
+  icon.innerHTML = isHidden
+    ? `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>`
+    : `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+}
+
+async function doLogin() {
+  const email = document.getElementById('loginUsername').value.trim();
+  const pass  = document.getElementById('loginPassword').value;
+  const errEl = document.getElementById('loginError');
+  errEl.style.display = 'none';
+
+  if (!email || !pass) { errEl.style.display = 'block'; return; }
+
+  const btn = document.querySelector('#loginPage .btn-danger');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<svg style="width:16px;height:16px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Signing In…'; }
+
+  try {
+    // Sign in via Supabase Auth REST
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+      body: JSON.stringify({ email, password: pass })
+    });
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      errEl.style.display = 'block';
+      if (btn) { btn.disabled = false; btn.innerHTML = '<svg style="width:16px;height:16px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Sign In'; }
+      return;
+    }
+
+    // Store auth token for future requests
+    _authToken = data.access_token;
+    _refreshToken = data.refresh_token;
+
+    // Resolve role from role map, or default to staff
+    const emailKey = (data.user?.email || email).toLowerCase();
+    const roleInfo = ROLE_MAP[emailKey] || { name: data.user?.email || email, role: 'staff' };
+
+    currentUser = { username: emailKey, email: emailKey, ...roleInfo };
+
     document.getElementById('loginPage').style.display = 'none';
     document.getElementById('app').classList.add('active');
-    document.getElementById('loginError').style.display = 'none';
     applyRoleUI();
-    startInactivityTimer();
+    // Bootstrap AFTER login so all Supabase requests use the user JWT
+    _bootstrapped = false; // force fresh load with authenticated token
+    await bootstrap();
     showView('dashboard');
-  } else {
-    document.getElementById('loginError').style.display = 'block';
+  } catch (e) {
+    errEl.style.display = 'block';
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg style="width:16px;height:16px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Sign In'; }
+    console.error('Login error:', e);
   }
 }
 
 function doLogout() {
   currentUser = null;
-  stopInactivityTimer();
+  _authToken = null; _refreshToken = null;
+  _bootstrapped = false; // force re-bootstrap on next login
+  // Clear cache so stale data isn't shown
+  Object.keys(CACHE).forEach(k => CACHE[k] = null);
   document.getElementById('app').classList.remove('active');
   document.getElementById('loginPage').style.display = 'flex';
   document.getElementById('loginUsername').value = '';
   document.getElementById('loginPassword').value = '';
-  document.getElementById('autoLogoutWarning').style.display = 'none';
 }
 
 // Staff-allowed views only
@@ -67,48 +112,30 @@ function applyRoleUI() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  AUTO LOGOUT (30 min inactivity)
-// ═══════════════════════════════════════════════════════════════
-let inactivityTimer = null, countdownTimer = null, countdownSecs = 60;
-const INACTIVITY_MS = 29 * 60 * 1000; // 29 min then show warning
+// ─── Auto-logout removed ──────────────────────────────────────
+function startInactivityTimer() {}
+function stopInactivityTimer()  {}
+function resetInactivityTimer() {}
 
-function startInactivityTimer() {
-  resetInactivityTimer();
-  ['click','keypress','mousemove','touchstart','scroll'].forEach(e => document.addEventListener(e, resetInactivityTimer, {passive:true}));
-}
-function stopInactivityTimer() {
-  clearTimeout(inactivityTimer); clearInterval(countdownTimer);
-  ['click','keypress','mousemove','touchstart','scroll'].forEach(e => document.removeEventListener(e, resetInactivityTimer));
-}
-function resetInactivityTimer() {
-  clearTimeout(inactivityTimer); clearInterval(countdownTimer);
-  document.getElementById('autoLogoutWarning').style.display = 'none';
-  inactivityTimer = setTimeout(showLogoutWarning, INACTIVITY_MS);
-}
-function showLogoutWarning() {
-  countdownSecs = 60;
-  const warn = document.getElementById('autoLogoutWarning');
-  warn.style.display = 'flex';
-  document.getElementById('autoLogoutCountdown').textContent = countdownSecs;
-  countdownTimer = setInterval(() => {
-    countdownSecs--;
-    document.getElementById('autoLogoutCountdown').textContent = countdownSecs;
-    if (countdownSecs <= 0) { clearInterval(countdownTimer); doLogout(); toast('Logged out due to inactivity.','error'); }
-  }, 1000);
-}
 
 // ═══════════════════════════════════════════════════════════════
 //  SUPABASE CONFIGURATION
 //  Replace the two values below with your actual project values.
 //  Found in: Supabase Dashboard → Project Settings → API
 // ═══════════════════════════════════════════════════════════════
-const SUPABASE_URL = 'https://mpbpeawuzdvlnceaxbaq.supabase.co';  // ← REPLACE THIS
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wYnBlYXd1emR2bG5jZWF4YmFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3ODExMzUsImV4cCI6MjA5NTM1NzEzNX0.zhm5J65HIyxg0wu-16A6G_L5jzMsZdh61Uaq1FQMMBo';                 // ← REPLACE THIS
+const SUPABASE_URL = 'https://mpbpeawuzdvlnceaxbaq.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1wYnBlYXd1emR2bG5jZWF4YmFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3ODExMzUsImV4cCI6MjA5NTM1NzEzNX0.zhm5J65HIyxg0wu-16A6G_L5jzMsZdh61Uaq1FQMMBo';
+
+// Auth state — set after Supabase Auth sign-in
+let _authToken = null, _refreshToken = null;
 
 // ─── Supabase REST client (no npm required) ──────────────────
 const sb = {
-  _h: () => ({ 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SUPABASE_KEY }),
+  _h: () => ({
+    'Content-Type': 'application/json',
+    'apikey': SUPABASE_KEY,
+    'Authorization': 'Bearer ' + (_authToken || SUPABASE_KEY)
+  }),
   async select(table, filter='') {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, { headers: { ...sb._h(), 'Prefer': 'return=representation' } });
     if (!r.ok) throw new Error(`GET ${table}: ${await r.text()}`);
@@ -316,6 +343,24 @@ function importBackup(input) {
 //  UTILS
 // ═══════════════════════════════════════════════════════════════
 const fmt = n => '₦' + Number(n||0).toLocaleString('en-NG');
+
+// ─── Comma-formatted number input helpers ────────────────────
+// Formats a text input to show commas as the user types (e.g. 1,000,000)
+function fmtInput(el) {
+  if (!el) return;
+  const raw = el.value.replace(/,/g, '');
+  if (raw === '' || raw === '-') return;
+  const num = parseFloat(raw);
+  if (isNaN(num)) { el.value = raw.replace(/[^\d.]/g, ''); return; }
+  // Preserve trailing decimal point while typing
+  const hasDot = raw.endsWith('.');
+  el.value = num.toLocaleString('en-NG') + (hasDot ? '.' : '');
+}
+// Parse a comma-formatted input back to a plain number
+function parseFmt(el) {
+  if (!el) return 0;
+  return parseFloat((el.value || '0').replace(/,/g, '')) || 0;
+}
 function uid() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16)}); }
 function pct(paid,total) { return total>0 ? Math.min(100,Math.round((paid/total)*100)) : 0; }
 function toast(msg,type='success') { const t=document.createElement('div'); t.className='toast '+type; t.innerHTML=type==='success'?`<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>${msg}`:`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>${msg}`; document.getElementById('toastContainer').appendChild(t); setTimeout(()=>t.remove(),3500); }
@@ -784,8 +829,8 @@ function resetAddForm() {
   ['shortyPhotoBox','driverPhotoBox','guarantorPhotoBox'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='';});
   ['shortyPhotoInput','driverPhotoInput','guarantorPhotoInput'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
 }
-function calcProfit(){const cost=parseFloat(document.getElementById('k_cost').value)||0,total=parseFloat(document.getElementById('k_total').value)||0;if(cost>0&&total>0){document.getElementById('profitBox').style.display='block';document.getElementById('pb_cost').textContent=fmt(cost);document.getElementById('pb_total').textContent=fmt(total);document.getElementById('pb_profit').textContent=fmt(total-cost);}else document.getElementById('profitBox').style.display='none';calcInstallmentCount();}
-function calcInstallmentCount(){const total=parseFloat(document.getElementById('k_total').value)||0,inst=parseFloat(document.getElementById('k_installment').value)||0;if(total>0&&inst>0){document.getElementById('installmentSummary').style.display='block';document.getElementById('is_count').textContent=Math.ceil(total/inst);document.getElementById('is_each').textContent=fmt(inst);}else document.getElementById('installmentSummary').style.display='none';}
+function calcProfit(){const cost=parseFmt(document.getElementById('k_cost')),total=parseFmt(document.getElementById('k_total'));if(cost>0&&total>0){document.getElementById('profitBox').style.display='block';document.getElementById('pb_cost').textContent=fmt(cost);document.getElementById('pb_total').textContent=fmt(total);document.getElementById('pb_profit').textContent=fmt(total-cost);}else document.getElementById('profitBox').style.display='none';calcInstallmentCount();}
+function calcInstallmentCount(){const total=parseFmt(document.getElementById('k_total')),inst=parseFmt(document.getElementById('k_installment'));if(total>0&&inst>0){document.getElementById('installmentSummary').style.display='block';document.getElementById('is_count').textContent=Math.ceil(total/inst);document.getElementById('is_each').textContent=fmt(inst);}else document.getElementById('installmentSummary').style.display='none';}
 
 async function saveKeke() {
   const plate=document.getElementById('k_plate').value.trim().toUpperCase();
@@ -793,9 +838,9 @@ async function saveKeke() {
   const phone=document.getElementById('k_phone').value.trim();
   const shorty=document.getElementById('k_shorty').value.trim();
   const shortyPhone=document.getElementById('k_shorty_phone').value.trim();
-  const cost=parseFloat(document.getElementById('k_cost').value)||0;
-  const totalLoan=parseFloat(document.getElementById('k_total').value)||0;
-  const inst=parseFloat(document.getElementById('k_installment').value)||0;
+  const cost=parseFmt(document.getElementById('k_cost'));
+  const totalLoan=parseFmt(document.getElementById('k_total'));
+  const inst=parseFmt(document.getElementById('k_installment'));
   const start=document.getElementById('k_start').value;
   const batch=document.getElementById('k_batch').value;
   if(!plate||!driver||!phone||!shorty||!shortyPhone||!cost||!totalLoan||!inst||!start||!batch){toast('Fill in all required (*) fields.','error');return;}
@@ -988,7 +1033,7 @@ async function openPaymentModal(id){
   }
   _currentInstallment=k.installment_amount||0;
   document.getElementById('pmTitle').textContent=`Record Payment — ${k.driver_name} (${k.plate})`;
-  document.getElementById('pm_amount').value=k.installment_amount||'';
+  document.getElementById('pm_amount').value=k.installment_amount ? Number(k.installment_amount).toLocaleString('en-NG') : '';
   document.getElementById('pm_date').valueAsDate=new Date();
   document.getElementById('pm_note').value='';
   document.getElementById('pmShortWarning').style.display='none';
@@ -998,7 +1043,7 @@ async function openPaymentModal(id){
   document.getElementById('paymentModal').classList.add('active');
 }
 function checkShortPayment(input){
-  const v=parseFloat(input.value)||0;
+  const v=parseFmt(input);
   const shortWarn=document.getElementById('pmShortWarning');
   const overWarn=document.getElementById('pmOverWarning');
   shortWarn.style.display=(v>0&&v<_currentInstallment)?'':'none';
@@ -1015,7 +1060,7 @@ function closePaymentModal(){document.getElementById('paymentModal').classList.r
 async function savePayment(){
   if(_savingPayment)return; // prevent double-click
   _savingPayment=true;
-  const amount=parseFloat(document.getElementById('pm_amount').value)||0;
+  const amount=parseFmt(document.getElementById('pm_amount'));
   const date=document.getElementById('pm_date').value;
   const note=document.getElementById('pm_note').value.trim();
   if(!amount||!date){toast('Enter amount and date.','error');_savingPayment=false;return;}
@@ -1060,13 +1105,13 @@ function deleteComplaint(compId){if(!isAdmin()){toast('Admin access required.','
 //  REPOSSESSION / REASSIGN
 // ═══════════════════════════════════════════════════════════════
 let currentRepoKekeId=null;
-async function openRepoModal(kekeId){if(!isAdmin()){toast('Admin access required.','error');return;}currentRepoKekeId=kekeId;const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===kekeId);if(!k)return;document.getElementById('repoTitle').textContent=`Reassign ${k.plate}`;document.getElementById('repoKekeInfo').innerHTML=`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Keke <strong>${k.plate}</strong> being reassigned from <strong>${k.driver_name}</strong>. Same keke details kept. New loan starts from scratch.</p>`;document.getElementById('repo_start').valueAsDate=new Date();document.getElementById('repo_total').value='';document.getElementById('repo_inst').value=k.installment_amount||'';document.getElementById('repo_schedule').value=k.schedule||'3days';document.getElementById('repo_batch').value=k.batch||'';['repo_driver','repo_phone','repo_phone2','repo_address','repo_guarantor','repo_gphone','repo_gaddress','repo_shorty','repo_shorty_phone','repo_notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('repo_grel').value='';document.getElementById('repoModal').classList.add('active');}
+async function openRepoModal(kekeId){if(!isAdmin()){toast('Admin access required.','error');return;}currentRepoKekeId=kekeId;const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===kekeId);if(!k)return;document.getElementById('repoTitle').textContent=`Reassign ${k.plate}`;document.getElementById('repoKekeInfo').innerHTML=`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Keke <strong>${k.plate}</strong> being reassigned from <strong>${k.driver_name}</strong>. Same keke details kept. New loan starts from scratch.</p>`;document.getElementById('repo_start').valueAsDate=new Date();document.getElementById('repo_total').value='';document.getElementById('repo_inst').value=k.installment_amount?Number(k.installment_amount).toLocaleString('en-NG'):'';document.getElementById('repo_schedule').value=k.schedule||'3days';document.getElementById('repo_batch').value=k.batch||'';['repo_driver','repo_phone','repo_phone2','repo_address','repo_guarantor','repo_gphone','repo_gaddress','repo_shorty','repo_shorty_phone','repo_notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('repo_grel').value='';document.getElementById('repoModal').classList.add('active');}
 function closeRepoModal(){document.getElementById('repoModal').classList.remove('active');currentRepoKekeId=null;}
 async function saveReassign(){
   if(!isAdmin()){toast('Admin access required.','error');return;}
   const newDriver=document.getElementById('repo_driver').value.trim(),newPhone=document.getElementById('repo_phone').value.trim();
   const newShorty=document.getElementById('repo_shorty').value.trim(),newShortyPhone=document.getElementById('repo_shorty_phone').value.trim();
-  const newTotal=parseFloat(document.getElementById('repo_total').value)||0,newInst=parseFloat(document.getElementById('repo_inst').value)||0;
+  const newTotal=parseFmt(document.getElementById('repo_total')),newInst=parseFmt(document.getElementById('repo_inst'));
   const newStart=document.getElementById('repo_start').value,newBatch=document.getElementById('repo_batch').value;
   if(!newDriver||!newPhone||!newShorty||!newShortyPhone||!newTotal||!newInst||!newStart||!newBatch){toast('Fill in all required fields.','error');return;}
   const btn=document.getElementById('saveRepoBtn'); btn.textContent='Saving...'; btn.disabled=true;
@@ -1086,9 +1131,9 @@ async function saveReassign(){
 //  EDIT KEKE (admin only)
 // ═══════════════════════════════════════════════════════════════
 let editingKekeId=null;
-async function openEditKekeModal(id){if(!isAdmin()){toast('Admin access required.','error');return;}const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===id);if(!k)return;editingKekeId=id;document.getElementById('editKekeTitle').textContent=`Edit — ${k.plate} (${k.driver_name})`;const f={ek_plate:'plate',ek_pt:'pt_number',ek_desc:'description',ek_chassis:'chassis_number',ek_engine:'engine_number'};Object.entries(f).forEach(([el,kk])=>document.getElementById(el).value=k[kk]||'');document.getElementById('ek_year').value='';document.getElementById('ek_cost').value=k.cost||'';document.getElementById('ek_total').value=k.total_loan||'';document.getElementById('ek_paid').value=k.paid||'';document.getElementById('ek_inst').value=k.installment_amount||'';document.getElementById('ek_schedule').value=k.schedule||'daily';document.getElementById('ek_batch').value=k.batch||'';document.getElementById('ek_start').value=k.start_date||'';document.getElementById('ek_status').value=k.status||'active';document.getElementById('ek_shorty').value=k.shorty_name||'';document.getElementById('ek_shorty_phone').value=k.shorty_phone||'';document.getElementById('ek_shorty_address').value=k.shorty_address||'';document.getElementById('ek_driver').value=k.driver_name||'';document.getElementById('ek_phone').value=k.driver_phone||'';document.getElementById('ek_phone2').value=k.driver_alt_phone||'';document.getElementById('ek_address').value=k.driver_address||'';document.getElementById('ek_guarantor').value=k.guarantor_name||'';document.getElementById('ek_gphone').value=k.guarantor_phone||'';document.getElementById('ek_grel').value=k.guarantor_relationship||'';document.getElementById('ek_gaddress').value=k.guarantor_address||'';document.getElementById('ek_notes').value=k.notes||'';document.getElementById('editKekeModal').classList.add('active');}
+async function openEditKekeModal(id){if(!isAdmin()){toast('Admin access required.','error');return;}const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===id);if(!k)return;editingKekeId=id;document.getElementById('editKekeTitle').textContent=`Edit — ${k.plate} (${k.driver_name})`;const f={ek_plate:'plate',ek_pt:'pt_number',ek_desc:'description',ek_chassis:'chassis_number',ek_engine:'engine_number'};Object.entries(f).forEach(([el,kk])=>document.getElementById(el).value=k[kk]||'');document.getElementById('ek_year').value='';document.getElementById('ek_cost').value=k.cost?Number(k.cost).toLocaleString('en-NG'):'';document.getElementById('ek_total').value=k.total_loan?Number(k.total_loan).toLocaleString('en-NG'):'';document.getElementById('ek_paid').value=k.paid?Number(k.paid).toLocaleString('en-NG'):'';document.getElementById('ek_inst').value=k.installment_amount?Number(k.installment_amount).toLocaleString('en-NG'):'';document.getElementById('ek_schedule').value=k.schedule||'daily';document.getElementById('ek_batch').value=k.batch||'';document.getElementById('ek_start').value=k.start_date||'';document.getElementById('ek_status').value=k.status||'active';document.getElementById('ek_shorty').value=k.shorty_name||'';document.getElementById('ek_shorty_phone').value=k.shorty_phone||'';document.getElementById('ek_shorty_address').value=k.shorty_address||'';document.getElementById('ek_driver').value=k.driver_name||'';document.getElementById('ek_phone').value=k.driver_phone||'';document.getElementById('ek_phone2').value=k.driver_alt_phone||'';document.getElementById('ek_address').value=k.driver_address||'';document.getElementById('ek_guarantor').value=k.guarantor_name||'';document.getElementById('ek_gphone').value=k.guarantor_phone||'';document.getElementById('ek_grel').value=k.guarantor_relationship||'';document.getElementById('ek_gaddress').value=k.guarantor_address||'';document.getElementById('ek_notes').value=k.notes||'';document.getElementById('editKekeModal').classList.add('active');}
 function closeEditKekeModal(){document.getElementById('editKekeModal').classList.remove('active');editingKekeId=null;}
-async function saveEditKeke(){if(!editingKekeId)return;const plate=document.getElementById('ek_plate').value.trim().toUpperCase(),driver=document.getElementById('ek_driver').value.trim(),phone=document.getElementById('ek_phone').value.trim();if(!plate||!driver||!phone){toast('Plate, driver name and phone required.','error');return;}const btn=document.getElementById('saveEditKekeBtn');btn.innerHTML='<div class="spinner"></div> Saving...';btn.disabled=true;try{const newPaid=parseFloat(document.getElementById('ek_paid').value)||0,newTotal=parseFloat(document.getElementById('ek_total').value)||0,newStatus=document.getElementById('ek_status').value;const updates={plate,pt_number:document.getElementById('ek_pt').value.trim(),description:document.getElementById('ek_desc').value.trim(),chassis_number:document.getElementById('ek_chassis').value.trim(),engine_number:document.getElementById('ek_engine').value.trim(),cost:parseFloat(document.getElementById('ek_cost').value)||0,total_loan:newTotal,paid:newPaid,status:newStatus,installment_amount:parseFloat(document.getElementById('ek_inst').value)||0,schedule:document.getElementById('ek_schedule').value,batch:document.getElementById('ek_batch').value,start_date:document.getElementById('ek_start').value,shorty_name:document.getElementById('ek_shorty').value.trim(),shorty_phone:document.getElementById('ek_shorty_phone').value.trim(),shorty_address:document.getElementById('ek_shorty_address').value.trim(),driver_name:driver,driver_phone:phone,driver_alt_phone:document.getElementById('ek_phone2').value.trim(),driver_address:document.getElementById('ek_address').value.trim(),guarantor_name:document.getElementById('ek_guarantor').value.trim(),guarantor_phone:document.getElementById('ek_gphone').value.trim(),guarantor_relationship:document.getElementById('ek_grel').value,guarantor_address:document.getElementById('ek_gaddress').value.trim(),notes:document.getElementById('ek_notes').value.trim(),completed_at:newStatus==='completed'?new Date().toISOString():null};await dbUpdateKeke(editingKekeId,updates);logActivity(`Edited: ${plate}`,'edit',`Driver: ${driver} | Batch ${updates.batch} | Status: ${newStatus} | By: ${currentUser?.name||'?'}`);toast(`Keke ${plate} updated.`);closeEditKekeModal();closeDetailModal();renderDrivers();}catch(e){toast('Error: '+e.message,'error');}finally{btn.innerHTML='Save Changes';btn.disabled=false;}}
+async function saveEditKeke(){if(!editingKekeId)return;const plate=document.getElementById('ek_plate').value.trim().toUpperCase(),driver=document.getElementById('ek_driver').value.trim(),phone=document.getElementById('ek_phone').value.trim();if(!plate||!driver||!phone){toast('Plate, driver name and phone required.','error');return;}const btn=document.getElementById('saveEditKekeBtn');btn.innerHTML='<div class="spinner"></div> Saving...';btn.disabled=true;try{const newPaid=parseFmt(document.getElementById('ek_paid')),newTotal=parseFmt(document.getElementById('ek_total')),newStatus=document.getElementById('ek_status').value;const updates={plate,pt_number:document.getElementById('ek_pt').value.trim(),description:document.getElementById('ek_desc').value.trim(),chassis_number:document.getElementById('ek_chassis').value.trim(),engine_number:document.getElementById('ek_engine').value.trim(),cost:parseFmt(document.getElementById('ek_cost')),total_loan:newTotal,paid:newPaid,status:newStatus,installment_amount:parseFmt(document.getElementById('ek_inst')),schedule:document.getElementById('ek_schedule').value,batch:document.getElementById('ek_batch').value,start_date:document.getElementById('ek_start').value,shorty_name:document.getElementById('ek_shorty').value.trim(),shorty_phone:document.getElementById('ek_shorty_phone').value.trim(),shorty_address:document.getElementById('ek_shorty_address').value.trim(),driver_name:driver,driver_phone:phone,driver_alt_phone:document.getElementById('ek_phone2').value.trim(),driver_address:document.getElementById('ek_address').value.trim(),guarantor_name:document.getElementById('ek_guarantor').value.trim(),guarantor_phone:document.getElementById('ek_gphone').value.trim(),guarantor_relationship:document.getElementById('ek_grel').value,guarantor_address:document.getElementById('ek_gaddress').value.trim(),notes:document.getElementById('ek_notes').value.trim(),completed_at:newStatus==='completed'?new Date().toISOString():null};await dbUpdateKeke(editingKekeId,updates);logActivity(`Edited: ${plate}`,'edit',`Driver: ${driver} | Batch ${updates.batch} | Status: ${newStatus} | By: ${currentUser?.name||'?'}`);toast(`Keke ${plate} updated.`);closeEditKekeModal();closeDetailModal();renderDrivers();}catch(e){toast('Error: '+e.message,'error');}finally{btn.innerHTML='Save Changes';btn.disabled=false;}}
 async function deleteKeke(){
   if(!isAdmin()){toast('Admin access required.','error');return;}
   if(!editingKekeId)return;
@@ -1119,15 +1164,15 @@ async function deleteKeke(){
 //  EDIT PAYMENT (admin only)
 // ═══════════════════════════════════════════════════════════════
 let editingPaymentId=null;
-async function openEditPaymentModal(payId){if(!isAdmin()){toast('Admin access required.','error');return;}let payments=await dbGetPayments();const p=payments.find(x=>x.id===payId);if(!p)return;editingPaymentId=payId;document.getElementById('ep_amount').value=p.amount||'';document.getElementById('ep_date').value=p.payment_date||'';document.getElementById('ep_balance').value=p.balance_after||'';document.getElementById('ep_note').value=p.note||'';document.getElementById('editPaymentModal').classList.add('active');}
+async function openEditPaymentModal(payId){if(!isAdmin()){toast('Admin access required.','error');return;}let payments=await dbGetPayments();const p=payments.find(x=>x.id===payId);if(!p)return;editingPaymentId=payId;document.getElementById('ep_amount').value=p.amount?Number(p.amount).toLocaleString('en-NG'):'';document.getElementById('ep_date').value=p.payment_date||'';document.getElementById('ep_balance').value=p.balance_after?Number(p.balance_after).toLocaleString('en-NG'):'';document.getElementById('ep_note').value=p.note||'';document.getElementById('editPaymentModal').classList.add('active');}
 function closeEditPaymentModal(){document.getElementById('editPaymentModal').classList.remove('active');editingPaymentId=null;}
 async function saveEditPayment(){
   if(!editingPaymentId)return;
-  const amount=parseFloat(document.getElementById('ep_amount').value)||0,date=document.getElementById('ep_date').value;
+  const amount=parseFmt(document.getElementById('ep_amount')),date=document.getElementById('ep_date').value;
   if(!amount||!date){toast('Amount and date required.','error');return;}
   const btn=document.getElementById('saveEditPayBtn');btn.textContent='Saving...';btn.disabled=true;
   try{
-    const updates={amount,payment_date:date,balance_after:parseFloat(document.getElementById('ep_balance').value)||0,note:document.getElementById('ep_note').value.trim()};
+    const updates={amount,payment_date:date,balance_after:parseFmt(document.getElementById('ep_balance')),note:document.getElementById('ep_note').value.trim()};
     // Update Supabase first — properly awaited
     await sb.update('keke_payments',`id=eq.${editingPaymentId}`,updates);
     // Update cache
@@ -1684,4 +1729,4 @@ async function saveUpdatedPhoto() {
   // Refresh detail modal if open
   if(currentDetailKekeId===photoUpdateKekeId) openDetail(photoUpdateKekeId);
 }
-window.addEventListener('load', () => { setTopbarDate(); bootstrap().catch(console.error); });
+window.addEventListener('load', () => { setTopbarDate(); });

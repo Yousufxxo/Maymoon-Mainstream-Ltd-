@@ -25,6 +25,11 @@
     .login-logo .logo-icon img{width:100%;height:100%;object-fit:cover}
     .login-logo h2{font-size:1.4rem;font-weight:700;color:var(--red);letter-spacing:-.3px}
     .login-logo p{font-size:.85rem;color:var(--gray-600);margin-top:2px}
+    .password-input-wrap{position:relative;display:flex;align-items:center}
+    .password-input-wrap .form-control{padding-right:42px}
+    .pw-toggle{position:absolute;right:10px;background:none;border:none;cursor:pointer;color:var(--gray-400);padding:4px;display:flex;align-items:center;justify-content:center;transition:color .2s}
+    .pw-toggle:hover{color:var(--gray-700)}
+    .pw-toggle svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 
     /* APP */
     #app{display:none;min-height:100vh}
