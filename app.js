@@ -61,6 +61,10 @@ async function doLogin() {
 
     currentUser = { username: emailKey, email: emailKey, ...roleInfo };
 
+    localStorage.setItem('_authToken', _authToken);
+    localStorage.setItem('_refreshToken', _refreshToken);
+    localStorage.setItem('_currentUser', JSON.stringify(currentUser));
+
     document.getElementById('loginPage').style.display = 'none';
     document.getElementById('app').classList.add('active');
     applyRoleUI();
@@ -79,6 +83,9 @@ function doLogout() {
   currentUser = null;
   _authToken = null; _refreshToken = null;
   _bootstrapped = false; // force re-bootstrap on next login
+  localStorage.removeItem('_authToken');
+  localStorage.removeItem('_refreshToken');
+  localStorage.removeItem('_currentUser');
   // Clear cache so stale data isn't shown
   Object.keys(CACHE).forEach(k => CACHE[k] = null);
   document.getElementById('app').classList.remove('active');
@@ -1729,4 +1736,30 @@ async function saveUpdatedPhoto() {
   // Refresh detail modal if open
   if(currentDetailKekeId===photoUpdateKekeId) openDetail(photoUpdateKekeId);
 }
-window.addEventListener('load', () => { setTopbarDate(); });
+window.addEventListener('load', async () => {
+  setTopbarDate();
+
+  // Restore session if previously logged in
+  const savedUser    = localStorage.getItem('_currentUser');
+  const savedToken   = localStorage.getItem('_authToken');
+  const savedRefresh = localStorage.getItem('_refreshToken');
+
+  if (savedUser && savedToken) {
+    try {
+      currentUser   = JSON.parse(savedUser);
+      _authToken    = savedToken;
+      _refreshToken = savedRefresh;
+
+      document.getElementById('loginPage').style.display = 'none';
+      document.getElementById('app').classList.add('active');
+      applyRoleUI();
+      await bootstrap();
+      showView('dashboard');
+    } catch (e) {
+      // Corrupt stored data — clear and show login
+      localStorage.removeItem('_authToken');
+      localStorage.removeItem('_refreshToken');
+      localStorage.removeItem('_currentUser');
+    }
+  }
+});
