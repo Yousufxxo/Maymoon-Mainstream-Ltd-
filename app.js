@@ -72,6 +72,7 @@ async function doLogin() {
     _bootstrapped = false; // force fresh load with authenticated token
     await bootstrap();
     showView('dashboard');
+    startProactiveTokenRefresh();
   } catch (e) {
     errEl.style.display = 'block';
     if (btn) { btn.disabled = false; btn.innerHTML = '<svg style="width:16px;height:16px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Sign In'; }
@@ -83,6 +84,7 @@ function doLogout() {
   currentUser = null;
   _authToken = null; _refreshToken = null;
   _bootstrapped = false; // force re-bootstrap on next login
+  stopProactiveTokenRefresh();
   localStorage.removeItem('_authToken');
   localStorage.removeItem('_refreshToken');
   localStorage.removeItem('_currentUser');
@@ -135,6 +137,66 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 // Auth state — set after Supabase Auth sign-in
 let _authToken = null, _refreshToken = null;
+let _refreshInFlight = null; // dedupes concurrent refresh attempts
+
+// Calls Supabase's token refresh endpoint using the stored refresh token to
+// get a fresh access token, without forcing the user to log in again.
+async function _refreshAuthToken() {
+  if (!_refreshToken) return false;
+  if (_refreshInFlight) return _refreshInFlight; // another request already refreshing — wait on it
+  _refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({ refresh_token: _refreshToken })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error || !data.access_token) return false;
+      _authToken = data.access_token;
+      _refreshToken = data.refresh_token || _refreshToken;
+      localStorage.setItem('_authToken', _authToken);
+      localStorage.setItem('_refreshToken', _refreshToken);
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      _refreshInFlight = null;
+    }
+  })();
+  return _refreshInFlight;
+}
+
+// Detects Supabase's "JWT expired" / 401 responses specifically (as opposed
+// to other errors like permission denied, which a refresh won't fix).
+function _isAuthExpiredResponse(res, bodyText) {
+  if (res.status !== 401) return false;
+  return /jwt expired|pgrst303|invalid jwt|jwt is expired/i.test(bodyText || '');
+}
+
+// Wraps a fetch call: if it comes back as an expired-JWT 401, silently
+// refresh the token and retry the SAME request once before giving up.
+async function _sbFetch(url, options) {
+  let res = await fetch(url, options);
+  if (!res.ok) {
+    const bodyText = await res.clone().text();
+    if (_isAuthExpiredResponse(res, bodyText)) {
+      const refreshed = await _refreshAuthToken();
+      if (refreshed) {
+        // Rebuild headers with the new token and retry once
+        const retryOptions = { ...options, headers: { ...options.headers, 'Authorization': 'Bearer ' + _authToken } };
+        res = await fetch(url, retryOptions);
+      } else {
+        // Refresh token itself is dead — the session is truly over.
+        // Force a clean logout so the user gets a clear "please sign in again"
+        // instead of silent, repeated 401 failures.
+        toast('⚠️ Your session expired. Please sign in again.', 'error');
+        setTimeout(() => doLogout(), 800);
+      }
+    }
+  }
+  return res;
+}
 
 // ─── Supabase REST client (no npm required) ──────────────────
 const sb = {
@@ -144,27 +206,27 @@ const sb = {
     'Authorization': 'Bearer ' + (_authToken || SUPABASE_KEY)
   }),
   async select(table, filter='') {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, { headers: { ...sb._h(), 'Prefer': 'return=representation' } });
+    const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, { headers: { ...sb._h(), 'Prefer': 'return=representation' } });
     if (!r.ok) throw new Error(`GET ${table}: ${await r.text()}`);
     return r.json();
   },
   async insert(table, row) {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, { method:'POST', headers:{ ...sb._h(), 'Prefer':'return=representation' }, body:JSON.stringify(row) });
+    const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}`, { method:'POST', headers:{ ...sb._h(), 'Prefer':'return=representation' }, body:JSON.stringify(row) });
     if (!r.ok) throw new Error(`INSERT ${table}: ${await r.text()}`);
     const d = await r.json(); return Array.isArray(d) ? d[0] : d;
   },
   async upsert(table, row) {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, { method:'POST', headers:{ ...sb._h(), 'Prefer':'return=representation,resolution=merge-duplicates' }, body:JSON.stringify(row) });
+    const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}`, { method:'POST', headers:{ ...sb._h(), 'Prefer':'return=representation,resolution=merge-duplicates' }, body:JSON.stringify(row) });
     if (!r.ok) throw new Error(`UPSERT ${table}: ${await r.text()}`);
     const d = await r.json(); return Array.isArray(d) ? d[0] : d;
   },
   async update(table, filter, changes) {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, { method:'PATCH', headers:{ ...sb._h(), 'Prefer':'return=representation' }, body:JSON.stringify(changes) });
+    const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, { method:'PATCH', headers:{ ...sb._h(), 'Prefer':'return=representation' }, body:JSON.stringify(changes) });
     if (!r.ok) throw new Error(`PATCH ${table}: ${await r.text()}`);
     const d = await r.json(); return Array.isArray(d) ? d[0] : d;
   },
   async delete(table, filter) {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, { method:'DELETE', headers:sb._h() });
+    const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, { method:'DELETE', headers:sb._h() });
     if (!r.ok) throw new Error(`DELETE ${table}: ${await r.text()}`);
   },
   async getSetting(key) { const rows = await sb.select('maymoon_settings', `key=eq.${key}`); return rows.length ? rows[0].value : null; },
@@ -172,13 +234,179 @@ const sb = {
 };
 
 // ─── Sync indicator ───────────────────────────────────────────
+// Tracks real connectivity (navigator.onLine + actual fetch failures) so the
+// badge only ever says "Offline" when the device genuinely has no internet.
+// A failed Supabase call while the browser IS online shows "Reconnecting…"
+// and auto-retries quietly instead of getting stuck on a scary red label.
+let _lastSyncStatus = 'synced';
+let _reconnectTimer = null;
+
 function setSyncStatus(status) {
+  _lastSyncStatus = status;
   const dot = document.querySelector('.sync-dot'), span = document.querySelector('.sync-indicator span');
   if (!dot || !span) return;
   dot.className = 'sync-dot';
-  if (status === 'syncing') { dot.classList.add('syncing'); span.textContent = 'Saving…'; }
-  else if (status === 'error') { dot.classList.add('error'); span.textContent = 'Offline'; }
-  else { span.textContent = 'Supabase ☁️'; }
+
+  if (status === 'syncing') {
+    dot.classList.add('syncing'); span.textContent = 'Saving…';
+    clearReconnectLoop();
+  } else if (status === 'error') {
+    if (!navigator.onLine) {
+      // Genuinely no internet connection
+      dot.classList.add('error'); span.textContent = 'Offline';
+    } else {
+      // Internet is fine — this was a transient/server-side hiccup, not a real outage
+      dot.classList.add('error'); span.textContent = 'Reconnecting…';
+    }
+    startReconnectLoop();
+  } else {
+    span.textContent = 'Supabase ☁️';
+    clearReconnectLoop();
+  }
+}
+
+// Quietly retry the bootstrap load in the background until it succeeds,
+// so the badge recovers on its own without the user needing to refresh.
+function startReconnectLoop() {
+  if (_reconnectTimer) return; // already retrying
+  _reconnectTimer = setInterval(async () => {
+    if (!navigator.onLine) return; // wait for the browser to report we're back online
+    try {
+      await sb.select('keke_loans', 'limit=1');
+      // Success — connection is healthy again, do a full silent refresh
+      clearReconnectLoop();
+      _bootstrapped = false;
+      await bootstrap();
+      toast('✅ Connection restored — back in sync.');
+    } catch (e) {
+      // Still failing, keep the loop going
+    }
+  }, 5000);
+}
+function clearReconnectLoop() {
+  if (_reconnectTimer) { clearInterval(_reconnectTimer); _reconnectTimer = null; }
+}
+
+// Listen for the browser's own online/offline events for instant feedback,
+// independent of whatever Supabase call happens to be in flight.
+window.addEventListener('online', () => {
+  toast('🌐 Internet connection restored.');
+  if (_lastSyncStatus === 'error') {
+    _bootstrapped = false;
+    bootstrap();
+  }
+});
+window.addEventListener('offline', () => {
+  setSyncStatus('error'); // navigator.onLine is now false, so this correctly shows "Offline"
+  toast('⚠️ No internet connection. Your device is offline.', 'error');
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  DRAFT AUTOSAVE — protects unsaved typing from accidental refresh,
+//  tab close, or browser crash. Saves to localStorage as the user types,
+//  and offers to restore it next time the form is opened.
+// ═══════════════════════════════════════════════════════════════
+const DRAFT_PREFIX = '_draft_';
+let _draftSaveTimers = {};
+
+// Reads the current value of every field in `fieldIds` and stores them
+// under `draftKey`. Debounced per draftKey so fast typing doesn't spam writes.
+function saveDraft(draftKey, fieldIds) {
+  clearTimeout(_draftSaveTimers[draftKey]);
+  _draftSaveTimers[draftKey] = setTimeout(() => {
+    const data = {};
+    let hasContent = false;
+    fieldIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      data[id] = el.value;
+      if (el.value && el.value.trim() !== '') hasContent = true;
+    });
+    try {
+      if (hasContent) {
+        localStorage.setItem(DRAFT_PREFIX + draftKey, JSON.stringify({ data, savedAt: Date.now() }));
+      } else {
+        // Nothing typed — don't leave an empty draft lying around
+        localStorage.removeItem(DRAFT_PREFIX + draftKey);
+      }
+    } catch (e) { /* localStorage full or unavailable — fail silently, not critical */ }
+  }, 400);
+}
+
+function getDraft(draftKey) {
+  try {
+    const raw = localStorage.getItem(DRAFT_PREFIX + draftKey);
+    if (!raw) return null;
+    const draft = JSON.parse(raw);
+    const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+    if (Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS) {
+      localStorage.removeItem(DRAFT_PREFIX + draftKey); // stale — discard quietly
+      return null;
+    }
+    return draft;
+  } catch (e) { return null; }
+}
+
+function clearDraft(draftKey) {
+  clearTimeout(_draftSaveTimers[draftKey]);
+  localStorage.removeItem(DRAFT_PREFIX + draftKey);
+}
+
+// Wires up 'input'/'change' listeners on a set of fields so every keystroke
+// is autosaved as a draft. Call once per form, after the form's HTML exists.
+function wireAutosave(draftKey, fieldIds) {
+  fieldIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el || el._draftWired) return; // avoid double-binding listeners
+    el._draftWired = true;
+    el.addEventListener('input', () => saveDraft(draftKey, fieldIds));
+    el.addEventListener('change', () => saveDraft(draftKey, fieldIds));
+  });
+}
+
+// If a draft exists for this key, ask the user whether to restore it.
+// Shows a friendly toast-style prompt rather than a jarring confirm() popup.
+function offerDraftRestore(draftKey, fieldIds, label) {
+  const draft = getDraft(draftKey);
+  if (!draft) return;
+  const ago = Math.max(1, Math.round((Date.now() - draft.savedAt) / 60000));
+  const when = ago < 1 ? 'a moment ago' : ago === 1 ? '1 minute ago' : ago < 60 ? `${ago} minutes ago` : 'a while ago';
+  showDraftBanner(draftKey, fieldIds, label, when);
+}
+
+function showDraftBanner(draftKey, fieldIds, label, when) {
+  const existing = document.getElementById('draftBanner_' + draftKey);
+  if (existing) existing.remove();
+  const banner = document.createElement('div');
+  banner.id = 'draftBanner_' + draftKey;
+  banner.style.cssText = 'background:#fef3c7;border:1px solid #fbbf24;border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap';
+  banner.innerHTML = `
+    <div style="font-size:.85rem;color:#92400e"><strong>📝 Unsaved ${label} found</strong> — saved ${when}, before the page was closed or refreshed. Restore it?</div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button class="btn btn-primary btn-sm" type="button">Restore</button>
+      <button class="btn btn-outline btn-sm" type="button">Discard</button>
+    </div>`;
+  const [restoreBtn, discardBtn] = banner.querySelectorAll('button');
+  restoreBtn.onclick = () => {
+    const draft = getDraft(draftKey);
+    if (draft) {
+      fieldIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && draft.data[id] !== undefined) el.value = draft.data[id];
+      });
+      // Re-run any dependent UI calculations if present
+      if (typeof calcProfit === 'function' && fieldIds.includes('k_cost')) calcProfit();
+    }
+    banner.remove();
+    toast('Draft restored.');
+  };
+  discardBtn.onclick = () => {
+    clearDraft(draftKey);
+    banner.remove();
+  };
+  const target = fieldIds[0] && document.getElementById(fieldIds[0]);
+  const card = target ? (target.closest('.card-body') || target.closest('.modal-body')) : null;
+  if (card) card.insertBefore(banner, card.firstChild);
 }
 
 // ─── In-memory cache ──────────────────────────────────────────
@@ -467,7 +695,11 @@ function showView(v) {
   if(v==='maintenance')  renderMaintenance();
   if(v==='backup')       renderBackupView();
   if(v==='activityLog')  renderActivityLog();
-  if(v==='addKeke')      { document.getElementById('k_start').valueAsDate=new Date(); resetAddForm(); }
+  if(v==='addKeke')      {
+    if (!document.getElementById('k_start').value) document.getElementById('k_start').valueAsDate=new Date();
+    wireAutosave('addKeke', ADD_KEKE_FIELDS);
+    offerDraftRestore('addKeke', ADD_KEKE_FIELDS, 'Register Keke form');
+  }
 }
 function openSidebar()  { document.getElementById('sidebar').classList.add('open');    document.getElementById('sidebarOverlay').classList.add('active'); }
 function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('active'); }
@@ -824,6 +1056,10 @@ async function renderShorties() {
 // ═══════════════════════════════════════════════════════════════
 //  REGISTER KEKE
 // ═══════════════════════════════════════════════════════════════
+const ADD_KEKE_FIELDS = ['k_plate','k_pt','k_desc','k_chassis','k_engine','k_year','k_cost','k_total','k_batch','k_schedule','k_installment','k_start',
+  'k_shorty','k_shorty_phone','k_shorty_phone2','k_shorty_address',
+  'k_driver','k_phone','k_phone2','k_address','k_guarantor','k_gphone','k_grel','k_gaddress','k_notes'];
+
 function resetAddForm() {
   ['k_plate','k_pt','k_desc','k_chassis','k_engine','k_year','k_cost','k_total','k_installment','k_notes',
    'k_shorty','k_shorty_phone','k_shorty_phone2','k_shorty_address',
@@ -835,6 +1071,7 @@ function resetAddForm() {
   ['shortyPreview','driverPreview','guarantorPreview'].forEach(id=>{const el=document.getElementById(id);if(el){el.src='';el.classList.remove('visible');}});
   ['shortyPhotoBox','driverPhotoBox','guarantorPhotoBox'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='';});
   ['shortyPhotoInput','driverPhotoInput','guarantorPhotoInput'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  clearDraft('addKeke'); // form was explicitly reset/submitted — no leftover draft to restore
 }
 function calcProfit(){const cost=parseFmt(document.getElementById('k_cost')),total=parseFmt(document.getElementById('k_total'));if(cost>0&&total>0){document.getElementById('profitBox').style.display='block';document.getElementById('pb_cost').textContent=fmt(cost);document.getElementById('pb_total').textContent=fmt(total);document.getElementById('pb_profit').textContent=fmt(total-cost);}else document.getElementById('profitBox').style.display='none';calcInstallmentCount();}
 function calcInstallmentCount(){const total=parseFmt(document.getElementById('k_total')),inst=parseFmt(document.getElementById('k_installment'));if(total>0&&inst>0){document.getElementById('installmentSummary').style.display='block';document.getElementById('is_count').textContent=Math.ceil(total/inst);document.getElementById('is_each').textContent=fmt(inst);}else document.getElementById('installmentSummary').style.display='none';}
@@ -1048,6 +1285,9 @@ async function openPaymentModal(id){
   const bal=k.total_loan-k.paid;
   document.getElementById('pmLoanSummary').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center"><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Expected</div><div style="font-weight:800;color:var(--gray-800)">${fmt(k.installment_amount)}</div></div><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Paid So Far</div><div style="font-weight:800;color:var(--green)">${fmt(k.paid)}</div></div><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Balance</div><div style="font-weight:800;color:var(--red)">${fmt(bal)}</div></div></div>`;
   document.getElementById('paymentModal').classList.add('active');
+  const draftKey = 'payment_' + id;
+  wireAutosave(draftKey, ['pm_amount','pm_date','pm_note']);
+  offerDraftRestore(draftKey, ['pm_amount','pm_date','pm_note'], 'payment entry');
 }
 function checkShortPayment(input){
   const v=parseFmt(input);
@@ -1062,7 +1302,7 @@ function checkShortPayment(input){
     overWarn.style.display='none';
   }
 }
-function closePaymentModal(){document.getElementById('paymentModal').classList.remove('active');currentKekeId=null;_savingPayment=false;}
+function closePaymentModal(){document.getElementById('paymentModal').classList.remove('active');if(currentKekeId)clearDraft('payment_'+currentKekeId);currentKekeId=null;_savingPayment=false;}
 
 async function savePayment(){
   if(_savingPayment)return; // prevent double-click
@@ -1736,6 +1976,30 @@ async function saveUpdatedPhoto() {
   // Refresh detail modal if open
   if(currentDetailKekeId===photoUpdateKekeId) openDetail(photoUpdateKekeId);
 }
+window.addEventListener('beforeunload', (e) => {
+  // Warn before closing/refreshing if the Register Keke form has unsaved typing.
+  // The autosave already protects the data, but a heads-up avoids surprises.
+  const addKekeVisible = document.getElementById('view-addKeke') && document.getElementById('view-addKeke').style.display !== 'none';
+  if (addKekeVisible && getDraft('addKeke')) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+// Proactively refreshes the access token every 45 minutes (Supabase tokens
+// typically last 1 hour) so it never gets the chance to expire while the
+// user is actively working — the reactive retry-on-401 above is just a backstop.
+let _proactiveRefreshTimer = null;
+function startProactiveTokenRefresh() {
+  if (_proactiveRefreshTimer) return;
+  _proactiveRefreshTimer = setInterval(() => {
+    if (_refreshToken) _refreshAuthToken();
+  }, 45 * 60 * 1000);
+}
+function stopProactiveTokenRefresh() {
+  if (_proactiveRefreshTimer) { clearInterval(_proactiveRefreshTimer); _proactiveRefreshTimer = null; }
+}
+
 window.addEventListener('load', async () => {
   setTopbarDate();
 
@@ -1755,6 +2019,7 @@ window.addEventListener('load', async () => {
       applyRoleUI();
       await bootstrap();
       showView('dashboard');
+      startProactiveTokenRefresh();
     } catch (e) {
       // Corrupt stored data — clear and show login
       localStorage.removeItem('_authToken');
