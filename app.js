@@ -193,16 +193,21 @@ let _bootstrapped = false;
 async function bootstrap() {
   if (_bootstrapped) return;
   setSyncStatus('syncing');
+
+  // Helper: fetch one table and return fallback on failure
+  const safe = (promise, fallback, label) =>
+    promise.catch(e => { console.warn(`⚠️ bootstrap: ${label} failed —`, e.message); return fallback; });
+
   try {
     const [kekes, payments, complaints, svcRecs, docs, logs, holiday, bsched] = await Promise.all([
-      sb.select('keke_loans', 'order=created_at.desc'),
-      sb.select('keke_payments', 'order=payment_date.desc,recorded_at.desc'),
-      sb.select('keke_complaints', 'order=created_at.desc'),
-      sb.select('keke_service_records', 'order=created_at.desc'),
-      sb.select('keke_documents', 'order=uploaded_at.desc'),
-      sb.select('maymoon_activity_log', 'order=timestamp.desc&limit=500'),
-      sb.getSetting('holiday'),
-      sb.getSetting('batch_schedules'),
+      safe(sb.select('keke_loans',          'order=created_at.desc'),                    [], 'keke_loans'),
+      safe(sb.select('keke_payments',       'order=payment_date.desc,recorded_at.desc'), [], 'keke_payments'),
+      safe(sb.select('keke_complaints',     'order=created_at.desc'),                    [], 'keke_complaints'),
+      safe(sb.select('keke_service_records','order=created_at.desc'),                    [], 'keke_service_records'),
+      safe(sb.select('keke_documents',      'order=uploaded_at.desc'),                   [], 'keke_documents'),
+      safe(sb.select('maymoon_activity_log','order=timestamp.desc&limit=500'),           [], 'maymoon_activity_log'),
+      safe(sb.getSetting('holiday'),                                                     null, 'holiday setting'),
+      safe(sb.getSetting('batch_schedules'),                                             null, 'batch_schedules setting'),
     ]);
     CACHE.kekes          = kekes.map(_mapKeke);
     CACHE.payments       = payments.map(_mapPayment);
