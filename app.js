@@ -1071,10 +1071,46 @@ function resetAddForm() {
   ['shortyPreview','driverPreview','guarantorPreview'].forEach(id=>{const el=document.getElementById(id);if(el){el.src='';el.classList.remove('visible');}});
   ['shortyPhotoBox','driverPhotoBox','guarantorPhotoBox'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='';});
   ['shortyPhotoInput','driverPhotoInput','guarantorPhotoInput'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ADD_KEKE_REQUIRED.forEach(id=>{const el=document.getElementById(id);if(el)el.classList.remove('field-error');});
   clearDraft('addKeke'); // form was explicitly reset/submitted — no leftover draft to restore
 }
 function calcProfit(){const cost=parseFmt(document.getElementById('k_cost')),total=parseFmt(document.getElementById('k_total'));if(cost>0&&total>0){document.getElementById('profitBox').style.display='block';document.getElementById('pb_cost').textContent=fmt(cost);document.getElementById('pb_total').textContent=fmt(total);document.getElementById('pb_profit').textContent=fmt(total-cost);}else document.getElementById('profitBox').style.display='none';calcInstallmentCount();}
 function calcInstallmentCount(){const total=parseFmt(document.getElementById('k_total')),inst=parseFmt(document.getElementById('k_installment'));if(total>0&&inst>0){document.getElementById('installmentSummary').style.display='block';document.getElementById('is_count').textContent=Math.ceil(total/inst);document.getElementById('is_each').textContent=fmt(inst);}else document.getElementById('installmentSummary').style.display='none';}
+
+// Required fields for the Register Keke form, matched 1:1 to the fields
+// marked with * in the HTML labels.
+const ADD_KEKE_REQUIRED = ['k_plate','k_cost','k_total','k_batch','k_schedule','k_installment','k_start','k_shorty','k_shorty_phone','k_driver','k_phone'];
+
+// Marks empty required fields red, clears the red mark on any field the
+// user fixes, and scrolls to the first problem field. Returns true if the
+// form is valid (nothing missing).
+function validateRequiredFields(fieldIds) {
+  let firstBadEl = null;
+  let allValid = true;
+  fieldIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const isEmpty = !el.value || !el.value.trim();
+    el.classList.toggle('field-error', isEmpty);
+    if (isEmpty) {
+      allValid = false;
+      if (!firstBadEl) firstBadEl = el;
+      // Once the user fixes this field, remove the red mark immediately —
+      // don't make them re-click Save to see it clear.
+      if (!el._validationWired) {
+        el._validationWired = true;
+        const clearIfFilled = () => { if (el.value && el.value.trim()) el.classList.remove('field-error'); };
+        el.addEventListener('input', clearIfFilled);
+        el.addEventListener('change', clearIfFilled);
+      }
+    }
+  });
+  if (firstBadEl) {
+    firstBadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    firstBadEl.focus();
+  }
+  return allValid;
+}
 
 async function saveKeke() {
   const plate=document.getElementById('k_plate').value.trim().toUpperCase();
@@ -1087,7 +1123,7 @@ async function saveKeke() {
   const inst=parseFmt(document.getElementById('k_installment'));
   const start=document.getElementById('k_start').value;
   const batch=document.getElementById('k_batch').value;
-  if(!plate||!driver||!phone||!shorty||!shortyPhone||!cost||!totalLoan||!inst||!start||!batch){toast('Fill in all required (*) fields.','error');return;}
+  if(!validateRequiredFields(ADD_KEKE_REQUIRED)){toast('Fill in all required (*) fields — highlighted in red.','error');return;}
   const btn=document.getElementById('saveKekeBtn'); btn.innerHTML='<div class="spinner"></div> Saving...'; btn.disabled=true;
   try {
     const [shortyPhotoUrl,driverPhotoUrl,guarantorPhotoUrl]=await Promise.all([uploadPhoto(document.getElementById('shortyPhotoInput')),uploadPhoto(document.getElementById('driverPhotoInput')),uploadPhoto(document.getElementById('guarantorPhotoInput'))]);

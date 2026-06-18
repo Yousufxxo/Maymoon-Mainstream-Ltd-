@@ -132,6 +132,8 @@
     .form-group label{display:block;font-size:.8rem;font-weight:600;color:var(--gray-700);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
     .form-control{width:100%;padding:11px 14px;border:1.5px solid var(--gray-200);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:.93rem;color:var(--gray-900);background:var(--gray-50);transition:all .2s;outline:none}
     .form-control:focus{border-color:var(--green);background:var(--white);box-shadow:0 0 0 3px rgba(26,122,60,.1)}
+    .form-control.field-error{border-color:var(--red);background:var(--red-bg)}
+    .form-control.field-error:focus{border-color:var(--red);background:var(--white);box-shadow:0 0 0 3px rgba(208,2,27,.12)}
     select.form-control{cursor:pointer}
     .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
     .form-grid.triple{grid-template-columns:1fr 1fr 1fr}
