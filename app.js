@@ -409,7 +409,24 @@ function showDraftBanner(draftKey, fieldIds, label, when) {
   if (card) card.insertBefore(banner, card.firstChild);
 }
 
-// ─── In-memory cache ──────────────────────────────────────────
+// ─── Modal scroll lock ────────────────────────────────────────
+// On mobile, when a modal is open the background page scroll interferes
+// with touch events inside the modal, making it feel un-scrollable.
+// This observer locks body scroll whenever ANY modal is active, and
+// restores it the moment every modal closes — covers all modals automatically.
+(function() {
+  function updateBodyLock() {
+    const anyOpen = document.querySelector('.modal-overlay.active');
+    document.body.style.overflow = anyOpen ? 'hidden' : '';
+  }
+  const obs = new MutationObserver(updateBodyLock);
+  // Start observing once the DOM is ready
+  window.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.modal-overlay').forEach(el => {
+      obs.observe(el, { attributes: true, attributeFilter: ['class'] });
+    });
+  });
+})();
 const CACHE = { kekes:null, payments:null, complaints:null, serviceRecords:null, documents:null, activityLog:null, holiday:null, batchSchedules:null };
 
 function _mapKeke(r) { if(!r)return null; return { ...r, total_loan:r.total_loan??0, installment_amount:r.installment_amount??0 }; }
