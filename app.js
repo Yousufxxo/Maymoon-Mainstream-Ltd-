@@ -503,6 +503,35 @@ async function dbGetPayments(kekeId)  { await bootstrap(); return kekeId ? CACHE
 async function dbSavePayment(p)       { setSyncStatus('syncing'); try { const s=await sb.insert('keke_payments',p); const m=_mapPayment(s||p); CACHE.payments.unshift(m); setSyncStatus('synced'); return m; } catch(e){ setSyncStatus('error'); throw e; } }
 async function dbDeletePayment(payId) { setSyncStatus('syncing'); try { await sb.delete('keke_payments',`id=eq.${payId}`); CACHE.payments=CACHE.payments.filter(p=>p.id!==payId); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); throw e; } }
 
+// ─── Recalculate a keke's "paid" total + status from its payment rows ─
+// Called after any edit/delete to a payment so the driver's record (DB + cache)
+// always matches the actual sum of their payment log entries.
+async function recalcKekeFromPayments(kekeId) {
+  const k = (CACHE.kekes||[]).find(x=>x.id===kekeId);
+  if (!k) return;
+  const newPaid = (CACHE.payments||[]).filter(p=>p.keke_id===kekeId).reduce((s,p)=>s+Number(p.amount||0),0);
+  const newBal = k.total_loan - newPaid;
+  const isComplete = newBal<=0 && newPaid>0;
+  const updates = { paid:newPaid };
+  // Only auto-flip between active/completed — never override on_repair/repossession
+  if (k.status==='active' || k.status==='completed') {
+    updates.status = isComplete ? 'completed' : 'active';
+    updates.completed_at = isComplete ? (k.completed_at || new Date().toISOString()) : null;
+  }
+  await dbUpdateKeke(kekeId, updates);
+}
+// ─── Refresh whichever driver-facing views are currently on screen ─
+function refreshDriverViews(kekeId) {
+  const dashEl=document.getElementById('view-dashboard');
+  if (dashEl && dashEl.style.display!=='none') refreshDashboard();
+  const driversEl=document.getElementById('view-drivers');
+  if (driversEl && driversEl.style.display!=='none') renderDrivers();
+  const alertsEl=document.getElementById('view-alerts');
+  if (alertsEl && alertsEl.style.display!=='none') renderAlerts();
+  if (typeof currentDetailKekeId!=='undefined' && currentDetailKekeId===kekeId && document.getElementById('detailModal').classList.contains('active')) openDetail(kekeId);
+  if (typeof currentDriverPayLogKekeId!=='undefined' && currentDriverPayLogKekeId===kekeId && document.getElementById('driverPayLogModal')?.classList.contains('active')) renderDriverPayLogModal();
+}
+
 // ─── Supabase helpers for complaints, service, docs, activity ─
 async function _sbSaveComplaint(c) { try { setSyncStatus('syncing'); await sb.insert('keke_complaints',c); CACHE.complaints.unshift(c); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
 async function _sbDeleteComplaint(id) { try { setSyncStatus('syncing'); await sb.delete('keke_complaints',`id=eq.${id}`); CACHE.complaints=CACHE.complaints.filter(c=>c.id!==id); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
@@ -1197,7 +1226,7 @@ async function renderDrivers() {
     const editBtn=isAdmin()?`<button class="btn btn-primary btn-sm" onclick="openEditKekeModal('${k.id}')">✏️ Edit</button>`:'';
     // Pay button — only shown for active drivers
     const payBtn=!paused
-      ?`<button class="btn btn-primary btn-sm" onclick="openPaymentModal('${k.id}')"><svg style="width:11px;height:11px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Payment</button>`
+      ?`<button class="btn btn-primary btn-sm" onclick="openPaymentModal('${k.id}')">Add Payment</button>`
       :(done?`<span class="badge badge-green" style="font-size:.7rem">Ownership ✓</span>`:`<span class="badge badge-gray" style="font-size:.7rem">⏸ Paused</span>`);
     const repoBtn=isAdmin()&&k.status==='repossession'?`<button class="btn btn-danger btn-sm" onclick="openRepoModal('${k.id}')">🔄 Reassign</button>`:'';
     const breakTag=isOnBreak(k.batch)?`<span class="badge" style="background:#fef3c7;color:#92400e;font-size:.66rem">⏸️ Break</span>`:'';
@@ -1231,10 +1260,45 @@ async function renderDrivers() {
         <button class="btn btn-call btn-sm" onclick="callDriver('${k.driver_phone}')"><svg style="width:12px;height:12px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.6 3.35 2 2 0 0 1 3.56 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.91a16 16 0 0 0 6 6l.91-.91a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>Call</button>
         <button class="btn btn-sms btn-sm" onclick="smsDriver('${k.driver_phone}','${k.driver_name}','${k.plate}',${bal})"><svg style="width:12px;height:12px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>SMS</button>
         <button class="btn btn-outline btn-sm" onclick="openDetail('${k.id}')">Details</button>
+        <button class="btn btn-outline btn-sm" onclick="openDriverPayLog('${k.id}')">Payment History</button>
         <button class="btn btn-outline btn-sm" onclick="openComplaintModal('${k.id}')">📋</button>
         ${editBtn}${payBtn}${repoBtn}
       </div>
     </div>`;
+  }).join('');
+}
+
+// ─── DRIVER PAYMENT LOG MODAL (per-card "💳 Payments" button) ─
+let currentDriverPayLogKekeId=null;
+async function openDriverPayLog(kekeId){
+  const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===kekeId); if(!k)return;
+  currentDriverPayLogKekeId=kekeId;
+  await dbGetPayments(); // ensure payments are loaded
+  document.getElementById('driverPayLogModal').classList.add('active');
+  renderDriverPayLogModal();
+}
+function closeDriverPayLogModal(){document.getElementById('driverPayLogModal').classList.remove('active');currentDriverPayLogKekeId=null;}
+function renderDriverPayLogModal(){
+  if(!currentDriverPayLogKekeId)return;
+  const k=LOCAL.getKekes().find(x=>x.id===currentDriverPayLogKekeId); if(!k)return;
+  const payments=LOCAL.getPayments().filter(p=>p.keke_id===currentDriverPayLogKekeId);
+  const bal=k.total_loan-k.paid;
+  document.getElementById('driverPayLogTitle').textContent=`📜 Payment History — ${k.driver_name} (${k.plate})`;
+  document.getElementById('driverPayLogSummary').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center;margin-bottom:18px">
+    <div style="background:var(--gray-50);border-radius:var(--radius-sm);padding:12px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Total Loan</div><div style="font-weight:800;color:var(--gray-800)">${fmt(k.total_loan)}</div></div>
+    <div style="background:var(--green-bg);border-radius:var(--radius-sm);padding:12px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Total Paid</div><div style="font-weight:800;color:var(--green)">${fmt(k.paid)}</div></div>
+    <div style="background:${k.status==='completed'?'var(--green-bg)':'var(--red-bg)'};border-radius:var(--radius-sm);padding:12px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Balance</div><div style="font-weight:800;color:${k.status==='completed'?'var(--green)':'var(--red)'}">${k.status==='completed'?'CLEARED':fmt(bal)}</div></div>
+  </div>`;
+  document.getElementById('driverPayLogCount').textContent=payments.length+' records';
+  const tbody=document.getElementById('driverPayLogTable');
+  if(!payments.length){tbody.innerHTML='<tr><td colspan="5"><div class="empty-state" style="padding:16px 0"><p>No payments recorded yet</p></div></td></tr>';return;}
+  const actionsCol=isAdmin()?(id=>`<button class="btn btn-outline btn-sm" onclick="openEditPaymentModal('${id}')">✏️</button> <button class="btn btn-danger btn-sm" onclick="deletePaymentById('${id}')">🗑️</button>`):()=>'';
+  tbody.innerHTML=payments.map(p=>{
+    const hasOver=p.overpay_amount>0;
+    const amountCell=hasOver
+      ?`<span style="font-weight:700">${fmt(p.expected_amount)}</span><span class="pay-over-tag">+${fmt(p.overpay_amount)}</span>`
+      :`${fmt(p.amount)}${p.is_short?' ⚠️':''}`;
+    return`<tr class="${p.is_short?'pay-short-row':hasOver?'pay-over-row':''}"><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td class="${p.is_short?'pay-short':hasOver?'pay-over':''}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
   }).join('');
 }
 
@@ -1467,6 +1531,7 @@ let editingPaymentId=null;
 async function openEditPaymentModal(payId){if(!isAdmin()){toast('Admin access required.','error');return;}let payments=await dbGetPayments();const p=payments.find(x=>x.id===payId);if(!p)return;editingPaymentId=payId;document.getElementById('ep_amount').value=p.amount?Number(p.amount).toLocaleString('en-NG'):'';document.getElementById('ep_date').value=p.payment_date||'';document.getElementById('ep_balance').value=p.balance_after?Number(p.balance_after).toLocaleString('en-NG'):'';document.getElementById('ep_note').value=p.note||'';document.getElementById('editPaymentModal').classList.add('active');}
 function closeEditPaymentModal(){document.getElementById('editPaymentModal').classList.remove('active');editingPaymentId=null;}
 async function saveEditPayment(){
+  if(!isAdmin()){toast('Admin access required.','error');return;}
   if(!editingPaymentId)return;
   const amount=parseFmt(document.getElementById('ep_amount')),date=document.getElementById('ep_date').value;
   if(!amount||!date){toast('Amount and date required.','error');return;}
@@ -1478,20 +1543,33 @@ async function saveEditPayment(){
     // Update cache
     const idx=(CACHE.payments||[]).findIndex(x=>x.id===editingPaymentId);
     if(idx>=0) CACHE.payments[idx]={...CACHE.payments[idx],...updates};
-    // Recalculate keke paid total from all payments
-    const editedPay=CACHE.payments[idx>=0?idx:0];
-    if(editedPay?.keke_id){
-      const kekeId=editedPay.keke_id;
-      const allKekePays=(CACHE.payments||[]).filter(p=>p.keke_id===kekeId);
-      const newTotalPaid=allKekePays.reduce((s,p)=>s+Number(p.amount),0);
-      await dbUpdateKeke(kekeId,{paid:newTotalPaid});
-    }
+    // Recalculate keke paid total + status from all remaining payments, and push to DB
+    const editedPay=idx>=0?CACHE.payments[idx]:null;
+    if(editedPay?.keke_id) await recalcKekeFromPayments(editedPay.keke_id);
     logActivity('Edited payment','edit',`${fmt(amount)} | ${date} | By: ${currentUser?.name||'?'}`);
     toast('Payment updated.');closeEditPaymentModal();renderPayments();
+    if(editedPay?.keke_id) refreshDriverViews(editedPay.keke_id);
   }catch(e){toast('Error: '+e.message,'error');}
   finally{btn.textContent='Save Changes';btn.disabled=false;}
 }
-async function deletePayment(){if(!isAdmin()){toast('Admin access required.','error');return;}if(!editingPaymentId)return;if(!confirm('Delete this payment?'))return;try{const all=LOCAL.getPayments();const p=all.find(x=>x.id===editingPaymentId)||{};await dbDeletePayment(editingPaymentId);logActivity('Deleted payment','delete',`Driver: ${p.driver_name||''} | ${fmt(p.amount)} | By: ${currentUser?.name||'?'}`);toast('Payment deleted.','error');closeEditPaymentModal();renderPayments();}catch(e){toast('Error: '+e.message,'error');}}
+async function deletePayment(){
+  if(!isAdmin()){toast('Admin access required.','error');return;}
+  if(!editingPaymentId)return;
+  if(!confirm('Delete this payment?'))return;
+  try{
+    const all=LOCAL.getPayments();
+    const p=all.find(x=>x.id===editingPaymentId)||{};
+    const kekeId=p.keke_id;
+    await dbDeletePayment(editingPaymentId);
+    // Recalculate keke paid total + status now that the payment row is gone, and push to DB
+    if(kekeId) await recalcKekeFromPayments(kekeId);
+    logActivity('Deleted payment','delete',`Driver: ${p.driver_name||''} | ${fmt(p.amount)} | By: ${currentUser?.name||'?'}`);
+    toast('Payment deleted.','error');
+    closeEditPaymentModal();
+    renderPayments();
+    if(kekeId) refreshDriverViews(kekeId);
+  }catch(e){toast('Error: '+e.message,'error');}
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  DETAIL MODAL
@@ -1594,11 +1672,12 @@ async function downloadAllPaymentsPDF(){
   openPDF(html,'Payment Records — Maymoon Mainstream Ltd');
 }
 
-async function downloadDriverPDF(){
-  if(!currentDetailKekeId){toast('No driver selected.','error');return;}
-  const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===currentDetailKekeId);if(!k)return;
-  const from=document.getElementById('dm_pdf_from').value,to=document.getElementById('dm_pdf_to').value;
-  let payments=await dbGetPayments(currentDetailKekeId);
+// Shared builder — generates a driver payment statement PDF for any keke,
+// optionally filtered by date range. Used by both the Detail modal's PDF
+// export and the per-card Payment History modal's download button.
+async function buildDriverPaymentStatementPDF(kekeId, from, to){
+  const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===kekeId);if(!k){toast('Driver not found.','error');return;}
+  let payments=await dbGetPayments(kekeId);
   if(from)payments=payments.filter(p=>p.payment_date>=from);
   if(to)payments=payments.filter(p=>p.payment_date<=to);
   const periodTotal=payments.reduce((s,p)=>s+Number(p.amount),0),bal=k.total_loan-k.paid;
@@ -1607,6 +1686,14 @@ async function downloadDriverPDF(){
   const rows=payments.length?payments.map(p=>`<tr><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td class="${p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;padding:20px;color:#adb5bd">No payments in selected date range</td></tr>';
   const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Driver Payment Statement</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Period: ${rangeNote} · Generated: ${dateStr}</div></div><div class="hdr-r">Plate: <strong>${k.plate}</strong>${k.pt_number?'<br>PT: '+k.pt_number:''}<br>Batch ${k.batch||'—'}</div></div><div class="info-grid"><div><strong>Driver:</strong> ${k.driver_name}</div><div><strong>Phone:</strong> ${k.driver_phone}${k.driver_alt_phone?' / '+k.driver_alt_phone:''}</div><div><strong>Shorty:</strong> ${k.shorty_name||'—'}</div><div><strong>Shorty Phone:</strong> ${k.shorty_phone||'—'}</div><div><strong>Address:</strong> ${k.driver_address||'—'}</div><div><strong>Schedule:</strong> ${schedLabel(k.schedule)} — ${fmt(k.installment_amount)}</div></div><div class="stats"><div class="stat"><div class="lbl">Total Loan</div><div class="val">${fmt(k.total_loan)}</div></div><div class="stat"><div class="lbl">Paid (all time)</div><div class="val g">${fmt(k.paid)}</div></div><div class="stat"><div class="lbl">Balance</div><div class="val ${bal<=0?'g':'r'}">${bal<=0?'CLEARED':fmt(bal)}</div></div></div>${(from||to)?`<div class="filter-note">📅 ${rangeNote} — ${payments.length} record(s), ${fmt(periodTotal)}</div>`:''}<table><thead><tr><th>Date</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
   openPDF(html,`Statement — ${k.driver_name} (${k.plate})`);
+}
+async function downloadDriverPDF(){
+  if(!currentDetailKekeId){toast('No driver selected.','error');return;}
+  await buildDriverPaymentStatementPDF(currentDetailKekeId, document.getElementById('dm_pdf_from').value, document.getElementById('dm_pdf_to').value);
+}
+async function downloadDriverPayLogPDF(){
+  if(!currentDriverPayLogKekeId){toast('No driver selected.','error');return;}
+  await buildDriverPaymentStatementPDF(currentDriverPayLogKekeId, '', '');
 }
 
 // ═══════════════════════════════════════════════════════════════

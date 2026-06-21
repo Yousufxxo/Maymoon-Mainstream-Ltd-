@@ -559,6 +559,28 @@
   <div class="modal-footer"><button class="btn btn-outline btn-sm" onclick="closeServiceModal()">Close</button></div>
 </div></div>
 
+<!-- DRIVER PAYMENT LOG MODAL (per-card) -->
+<div class="modal-overlay" id="driverPayLogModal"><div class="modal modal-lg">
+  <div class="modal-header"><h3 id="driverPayLogTitle">📜 Payment History</h3><button class="btn-close" onclick="closeDriverPayLogModal()">✕</button></div>
+  <div class="modal-body">
+    <div id="driverPayLogSummary"></div>
+    <div class="svc-history-footer" style="border-top:none;margin-top:0;padding-top:0;margin-bottom:10px">
+      <span style="display:flex;align-items:center;gap:8px;font-size:.82rem;font-weight:700;color:var(--gray-700)">📋 Payment Records <span class="badge badge-green" id="driverPayLogCount">0 records</span></span>
+      <button class="btn btn-outline btn-sm" onclick="downloadDriverPayLogPDF()" style="display:flex;align-items:center;gap:5px">
+        <svg style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2.5" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download PDF
+      </button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Amount</th><th>Balance After</th><th>Note</th><th>Actions</th></tr></thead>
+        <tbody id="driverPayLogTable"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-outline btn-sm" onclick="closeDriverPayLogModal()">Close</button></div>
+</div></div>
+
 <!-- PHOTO UPDATE MODAL -->
 <div class="modal-overlay" id="photoUpdateModal"><div class="modal">
   <div class="modal-header"><h3 id="photoUpdateTitle">📷 Update Photo</h3><button class="btn-close" onclick="closePhotoUpdateModal()">✕</button></div>
