@@ -569,7 +569,7 @@ function exportBackup() {
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const dateStr = new Date().toISOString().slice(0,10);
+  const dateStr = getTodayStr();
   a.href = url; a.download = `maymoon-backup-${dateStr}.json`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
@@ -646,7 +646,66 @@ function uid() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c
 function pct(paid,total) { return total>0 ? Math.min(100,Math.round((paid/total)*100)) : 0; }
 function toast(msg,type='success') { const t=document.createElement('div'); t.className='toast '+type; t.innerHTML=type==='success'?`<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>${msg}`:`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>${msg}`; document.getElementById('toastContainer').appendChild(t); setTimeout(()=>t.remove(),3500); }
 function schedLabel(s) { return {daily:'Daily','3days':'Every 3 Days','5days':'Every 5 Days',weekly:'Weekly'}[s]||s; }
-function setTopbarDate() { const el=document.getElementById('topbarDate'); if(el) el.textContent=new Date().toLocaleDateString('en-NG',{weekday:'short',day:'numeric',month:'short',year:'numeric'}); }
+// ─── Safe date display helpers ────────────────────────────────
+// new Date('YYYY-MM-DD') is parsed as UTC midnight, which shifts one day
+// back in timezones east of UTC. Always split manually so the date shown
+// matches the stored string exactly regardless of device timezone.
+function parseDateStr(dateStr) {
+  if (!dateStr) return null;
+  const parts = String(dateStr).slice(0, 10).split('-');
+  if (parts.length !== 3) return null;
+  return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+}
+function fmtDateStr(dateStr, opts) {
+  const d = parseDateStr(dateStr);
+  if (!d) return '—';
+  return d.toLocaleDateString('en-NG', opts || { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// ─── Authoritative "today" for the online site ────────────────
+// Fetches current date from WorldTimeAPI (free, no key) so every device,
+// regardless of its clock/timezone setting, sees the same date. Falls back
+// to the device date if offline or the API is slow.
+let _todayStr = null; // cached as YYYY-MM-DD
+async function fetchTodayStr() {
+  if (_todayStr) return _todayStr;
+  try {
+    const res = await fetch('https://worldtimeapi.org/api/timezone/Africa/Lagos', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      _todayStr = (data.datetime || '').slice(0, 10); // "YYYY-MM-DD"
+    }
+  } catch (e) { /* offline — fall through */ }
+  if (!_todayStr) {
+    // Fallback: build YYYY-MM-DD using device UTC+1 offset (Africa/Lagos)
+    const now = new Date();
+    const lag = new Date(now.getTime() + 60 * 60 * 1000); // +1h
+    _todayStr = lag.toISOString().slice(0, 10);
+  }
+  return _todayStr;
+}
+function getTodayStr() {
+  // Synchronous access — returns cached value or device-UTC+1 fallback
+  if (_todayStr) return _todayStr;
+  const now = new Date();
+  const lag = new Date(now.getTime() + 60 * 60 * 1000);
+  return lag.toISOString().slice(0, 10);
+}
+
+async function setTopbarDate() {
+  const todayStr = await fetchTodayStr();
+  const d = parseDateStr(todayStr);
+  const label = d ? d.toLocaleDateString('en-NG', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : todayStr;
+  const el = document.getElementById('topbarDate');
+  if (el) el.textContent = label;
+  // Pre-fill today's date on Record Payment and Complaint modals
+  // (done via setDateInputToday called per-modal on open)
+}
+function setDateInputToday(inputId) {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  el.value = getTodayStr();
+}
 function previewPhoto(input,previewId,boxId) { const file=input.files[0]; if(!file)return; const reader=new FileReader(); reader.onload=e=>{const img=document.getElementById(previewId);img.src=e.target.result;img.classList.add('visible');document.getElementById(boxId).style.display='none';}; reader.readAsDataURL(file); }
 
 // Quick inline camera for registration form
@@ -694,7 +753,7 @@ function isOnBreak(batch) {
   const h = LOCAL.getHoliday();
   const b = h[batch];
   if(!b) return false;
-  const today = new Date().toISOString().slice(0,10);
+  const today = getTodayStr();
   const start = b.startDate || b; // backwards compat with old string format
   const resume = b.resumeDate || b;
   if(typeof b === 'string') return today < b; // legacy
@@ -703,7 +762,7 @@ function isOnBreak(batch) {
 }
 
 function getPeriodDates(period) {
-  const now = new Date(); let from, to = now.toISOString().slice(0,10);
+  const now = new Date(); let from, to = getTodayStr();
   if(period==='week') { const d=new Date(now); d.setDate(d.getDate()-d.getDay()); from=d.toISOString().slice(0,10); }
   else if(period==='month') { from=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`; }
   else if(period==='3month') { const d=new Date(now); d.setMonth(d.getMonth()-3); from=d.toISOString().slice(0,10); }
@@ -742,7 +801,7 @@ function showView(v) {
   if(v==='backup')       renderBackupView();
   if(v==='activityLog')  renderActivityLog();
   if(v==='addKeke')      {
-    if (!document.getElementById('k_start').value) document.getElementById('k_start').valueAsDate=new Date();
+    if (!document.getElementById('k_start').value) document.getElementById('k_start').value=getTodayStr();
     wireAutosave('addKeke', ADD_KEKE_FIELDS);
     offerDraftRestore('addKeke', ADD_KEKE_FIELDS, 'Register Keke form');
   }
@@ -789,7 +848,7 @@ document.addEventListener('click', e => { if(!e.target.closest('.global-search-w
 //  HOLIDAY
 // ═══════════════════════════════════════════════════════════════
 function renderHoliday() {
-  const h=LOCAL.getHoliday(); const today=new Date().toISOString().slice(0,10);
+  const h=LOCAL.getHoliday(); const today=getTodayStr();
   const batchColors={A:{bg:'#eff6ff',border:'#bfdbfe',label:'#1e40af'},B:{bg:'#fefce8',border:'#fde68a',label:'#92400e'},C:{bg:'#fdf2f8',border:'#fbcfe8',label:'#9d174d'}};
   document.getElementById('holidayBatchCards').innerHTML=['A','B','C'].map(batch=>{
     const bdata=h[batch]||{};
@@ -875,7 +934,7 @@ async function refreshDashboard() {
   const kekes=await dbGetKekes(), payments=await dbGetPayments();
   const active=kekes.filter(k=>k.status==='active'), completed=kekes.filter(k=>k.status==='completed');
   const overdue=getOverdueDrivers(kekes,payments);
-  const todayStr=new Date().toISOString().slice(0,10);
+  const todayStr=getTodayStr();
   const todayPays=payments.filter(p=>p.payment_date===todayStr);
   const todayCol=todayPays.reduce((s,p)=>s+Number(p.amount),0);
   const allCol=payments.reduce((s,p)=>s+Number(p.amount),0);
@@ -901,7 +960,7 @@ async function refreshDashboard() {
   document.getElementById('stat-overdue').textContent=overdue.length;
   document.getElementById('stat-overdue-amt').textContent=fmt(overdueAmt)+' uncollected';
   document.getElementById('stat-outstanding').textContent=fmt(totalOutstanding);
-  document.getElementById('todayDate2').textContent=new Date().toLocaleDateString('en-NG',{weekday:'short',day:'numeric',month:'short'});
+  document.getElementById('todayDate2').textContent=parseDateStr(todayStr)?.toLocaleDateString('en-NG',{weekday:'short',day:'numeric',month:'short'})||todayStr;
 
   // Today collection box
   const shortfall=Math.max(0,expectedToday-todayCol);
@@ -939,7 +998,9 @@ function getOverdueDrivers(kekes,payments) {
     const kp=payments.filter(p=>p.keke_id===k.id);
     if(!kp.length)return(now-new Date(k.start_date||k.created_at).getTime())>three;
     const latest=kp.reduce((a,b)=>new Date(a.payment_date)>new Date(b.payment_date)?a:b);
-    return(now-new Date(latest.payment_date).getTime())>three;
+    // Parse payment_date safely (YYYY-MM-DD as local date, not UTC)
+    const latestLocal=parseDateStr(latest.payment_date);
+    return latestLocal?(now-latestLocal.getTime())>three:(now-new Date(latest.payment_date).getTime())>three;
   });
 }
 
@@ -1026,7 +1087,7 @@ async function renderReports() {
       <div class="card-header"><span class="card-title">⚠️ Short Payments in Period</span><span class="badge badge-red">${shortPays.length}</span></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Date</th><th>Driver</th><th>Plate</th><th>Paid</th><th>Expected</th><th>Shortfall</th></tr></thead>
-        <tbody>${shortPays.map(p=>`<tr class="pay-short-row"><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short'})}</td><td>${p.driver_name}</td><td>${p.plate}</td><td class="pay-short">${fmt(p.amount)}</td><td>${fmt(p.expected_amount)}</td><td style="color:var(--red);font-weight:700">${fmt((p.expected_amount||0)-p.amount)}</td></tr>`).join('')}</tbody>
+        <tbody>${shortPays.map(p=>`<tr class="pay-short-row"><td>${fmtDateStr(p.payment_date,{day:'numeric',month:'short'})}</td><td>${p.driver_name}</td><td>${p.plate}</td><td class="pay-short">${fmt(p.amount)}</td><td>${fmt(p.expected_amount)}</td><td style="color:var(--red);font-weight:700">${fmt((p.expected_amount||0)-p.amount)}</td></tr>`).join('')}</tbody>
       </table></div>
     </div>`:''}`;
 }
@@ -1039,7 +1100,7 @@ async function downloadReportPDF() {
   let pays=allPays.filter(p=>p.payment_date>=from&&p.payment_date<=to);
   if(batchF) pays=pays.filter(p=>p.batch===batchF);
   const totalCol=pays.reduce((s,p)=>s+Number(p.amount),0);
-  const dateStr=new Date().toLocaleDateString('en-NG',{day:'numeric',month:'long',year:'numeric'});
+  const dateStr=fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const batchStats=['A','B','C'].map(b=>{const bp=pays.filter(p=>p.batch===b);return{batch:b,col:bp.reduce((s,p)=>s+Number(p.amount),0),count:bp.length};});
   const html=`
     <div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Analytics Report</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Period: ${from} → ${to}${batchF?' | Batch '+batchF:''} · Generated: ${dateStr}</div></div><div class="hdr-r">${pays.length} payments<br><strong style="color:#1a7a3c;font-size:1rem">${fmt(totalCol)}</strong></div></div>
@@ -1298,7 +1359,7 @@ function renderDriverPayLogModal(){
     const amountCell=hasOver
       ?`<span style="font-weight:700">${fmt(p.expected_amount)}</span><span class="pay-over-tag">+${fmt(p.overpay_amount)}</span>`
       :`${fmt(p.amount)}${p.is_short?' ⚠️':''}`;
-    return`<tr class="${p.is_short?'pay-short-row':hasOver?'pay-over-row':''}"><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td class="${p.is_short?'pay-short':hasOver?'pay-over':''}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
+    return`<tr class="${p.is_short?'pay-short-row':hasOver?'pay-over-row':''}"><td>${fmtDateStr(p.payment_date)}</td><td class="${p.is_short?'pay-short':hasOver?'pay-over':''}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
   }).join('');
 }
 
@@ -1368,7 +1429,7 @@ async function renderPayments(){
     const amountCell=hasOver
       ?`<span style="font-weight:700">${fmt(p.expected_amount)}</span><span class="pay-over-tag">+${fmt(p.overpay_amount)}</span>`
       :`${fmt(p.amount)}${p.is_short?' ⚠️':''}`;
-    return`<tr class="${p.is_short?'pay-short-row':hasOver?'pay-over-row':''}"><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td><strong>${p.driver_name}</strong></td><td><span class="badge badge-gray">${p.plate}</span></td><td>${batchBadge(p.batch)}</td><td class="${p.is_short?'pay-short':hasOver?'pay-over':''}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
+    return`<tr class="${p.is_short?'pay-short-row':hasOver?'pay-over-row':''}"><td>${fmtDateStr(p.payment_date)}</td><td><strong>${p.driver_name}</strong></td><td><span class="badge badge-gray">${p.plate}</span></td><td>${batchBadge(p.batch)}</td><td class="${p.is_short?'pay-short':hasOver?'pay-over':''}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
   }).join('');
 }
 async function deletePaymentById(payId){if(!isAdmin()){toast('Admin access required','error');return;}if(!confirm('Delete this payment?'))return;editingPaymentId=payId;await deletePayment();}
@@ -1376,7 +1437,7 @@ async function deletePaymentById(payId){if(!isAdmin()){toast('Admin access requi
 // ═══════════════════════════════════════════════════════════════
 //  COMPLETED
 // ═══════════════════════════════════════════════════════════════
-async function renderCompleted(){const kekes=(await dbGetKekes()).filter(k=>k.status==='completed');document.getElementById('completedCount').textContent=kekes.length+' kekes';const tbody=document.getElementById('completedTable');if(!kekes.length){tbody.innerHTML='<tr><td colspan="7"><div class="empty-state"><p>No completed loans yet</p></div></td></tr>';return;}tbody.innerHTML=kekes.map(k=>`<tr><td><strong>${k.driver_name}</strong><div style="font-size:.76rem;color:var(--gray-500)">${k.driver_phone}</div></td><td><span class="badge badge-gray">${k.plate}</span>${k.pt_number?`<div style="font-size:.74rem;color:var(--gray-500)">PT: ${k.pt_number}</div>`:''}</td><td>${batchBadge(k.batch)}</td><td>${fmt(k.cost)}</td><td style="color:var(--green);font-weight:700">${fmt(k.paid)}</td><td style="color:#7c3aed;font-weight:700">${fmt(k.paid-k.cost)}</td><td>${k.completed_at?new Date(k.completed_at).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'}):'—'}</td></tr>`).join('');}
+async function renderCompleted(){const kekes=(await dbGetKekes()).filter(k=>k.status==='completed');document.getElementById('completedCount').textContent=kekes.length+' kekes';const tbody=document.getElementById('completedTable');if(!kekes.length){tbody.innerHTML='<tr><td colspan="7"><div class="empty-state"><p>No completed loans yet</p></div></td></tr>';return;}tbody.innerHTML=kekes.map(k=>`<tr><td><strong>${k.driver_name}</strong><div style="font-size:.76rem;color:var(--gray-500)">${k.driver_phone}</div></td><td><span class="badge badge-gray">${k.plate}</span>${k.pt_number?`<div style="font-size:.74rem;color:var(--gray-500)">PT: ${k.pt_number}</div>`:''}</td><td>${batchBadge(k.batch)}</td><td>${fmt(k.cost)}</td><td style="color:var(--green);font-weight:700">${fmt(k.paid)}</td><td style="color:#7c3aed;font-weight:700">${fmt(k.paid-k.cost)}</td><td>${k.completed_at?fmtDateStr(k.completed_at):'—'}</td></tr>`).join('');}
 
 // ═══════════════════════════════════════════════════════════════
 //  PAYMENT MODAL
@@ -1395,7 +1456,7 @@ async function openPaymentModal(id){
   _currentInstallment=k.installment_amount||0;
   document.getElementById('pmTitle').textContent=`Record Payment — ${k.driver_name} (${k.plate})`;
   document.getElementById('pm_amount').value=k.installment_amount ? Number(k.installment_amount).toLocaleString('en-NG') : '';
-  document.getElementById('pm_date').valueAsDate=new Date();
+  document.getElementById('pm_date').value=getTodayStr();
   document.getElementById('pm_note').value='';
   document.getElementById('pmShortWarning').style.display='none';
   document.getElementById('pmOverWarning').style.display='none';
@@ -1448,7 +1509,7 @@ async function savePayment(){
 //  COMPLAINT LOG
 // ═══════════════════════════════════════════════════════════════
 let currentComplaintKekeId=null;
-function openComplaintModal(kekeId){currentComplaintKekeId=kekeId;const kekes=LOCAL.getKekes();const k=kekes.find(x=>x.id===kekeId);if(!k)return;document.getElementById('complaintTitle').textContent=`📋 Complaint Log — ${k.driver_name} (${k.plate})`;document.getElementById('comp_date').valueAsDate=new Date();document.getElementById('comp_text').value='';document.getElementById('comp_category').value='payment';renderComplaintList();document.getElementById('complaintModal').classList.add('active');}
+function openComplaintModal(kekeId){currentComplaintKekeId=kekeId;const kekes=LOCAL.getKekes();const k=kekes.find(x=>x.id===kekeId);if(!k)return;document.getElementById('complaintTitle').textContent=`📋 Complaint Log — ${k.driver_name} (${k.plate})`;document.getElementById('comp_date').value=getTodayStr();document.getElementById('comp_text').value='';document.getElementById('comp_category').value='payment';renderComplaintList();document.getElementById('complaintModal').classList.add('active');}
 function closeComplaintModal(){document.getElementById('complaintModal').classList.remove('active');currentComplaintKekeId=null;}
 function renderComplaintList(){
   const all=LOCAL.getComplaints();
@@ -1456,7 +1517,7 @@ function renderComplaintList(){
   const container=document.getElementById('complaintList');
   if(!comps.length){container.innerHTML='<div class="empty-state" style="padding:16px 0"><p>No complaints recorded yet.</p></div>';return;}
   const catLabel={payment:'💳 Payment Issue',behaviour:'😤 Behaviour',accident:'🔧 Accident/Damage',missing:'❓ Missing/No Contact',other:'📌 Other'};
-  container.innerHTML=`<div style="font-size:.76rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${comps.length} Record(s)</div>`+comps.map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><div style="display:flex;align-items:center;gap:8px"><span class="comp-date">${new Date(c.date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</span>${isAdmin()?`<button class="comp-del" onclick="deleteComplaint('${c.id}')">✕</button>`:''}</div></div><div class="comp-text">${c.text}</div>${c.recorded_by?`<div style="font-size:.71rem;color:var(--gray-400);margin-top:4px">By: ${c.recorded_by}</div>`:''}</div>`).join('');
+  container.innerHTML=`<div style="font-size:.76rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${comps.length} Record(s)</div>`+comps.map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><div style="display:flex;align-items:center;gap:8px"><span class="comp-date">${fmtDateStr(c.date)}</span>${isAdmin()?`<button class="comp-del" onclick="deleteComplaint('${c.id}')">✕</button>`:''}</div></div><div class="comp-text">${c.text}</div>${c.recorded_by?`<div style="font-size:.71rem;color:var(--gray-400);margin-top:4px">By: ${c.recorded_by}</div>`:''}</div>`).join('');
 }
 function saveComplaint(){const text=document.getElementById('comp_text').value.trim();const date=document.getElementById('comp_date').value;const category=document.getElementById('comp_category').value;if(!text||!date){toast('Enter complaint text and date.','error');return;}const c={id:uid(),keke_id:currentComplaintKekeId,text,date,category,recorded_by:currentUser?.name||'?',created_at:new Date().toISOString()};_sbSaveComplaint(c);const k=LOCAL.getKekes().find(x=>x.id===currentComplaintKekeId);logActivity(`Complaint: ${k?.plate||''}`,'complaint',`Driver: ${k?.driver_name||''} | ${category} | ${text.slice(0,50)} | By: ${currentUser?.name||'?'}`);document.getElementById('comp_text').value='';renderComplaintList();toast('Complaint recorded.');}
 function deleteComplaint(compId){if(!isAdmin()){toast('Admin access required.','error');return;}if(!confirm('Delete this complaint?'))return;CACHE.complaints=(CACHE.complaints||[]).filter(c=>c.id!==compId);_sbDeleteComplaint(compId);renderComplaintList();toast('Deleted.','error');}
@@ -1469,7 +1530,7 @@ function deleteComplaint(compId){if(!isAdmin()){toast('Admin access required.','
 //  REPOSSESSION / REASSIGN
 // ═══════════════════════════════════════════════════════════════
 let currentRepoKekeId=null;
-async function openRepoModal(kekeId){if(!isAdmin()){toast('Admin access required.','error');return;}currentRepoKekeId=kekeId;const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===kekeId);if(!k)return;document.getElementById('repoTitle').textContent=`Reassign ${k.plate}`;document.getElementById('repoKekeInfo').innerHTML=`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Keke <strong>${k.plate}</strong> being reassigned from <strong>${k.driver_name}</strong>. Same keke details kept. New loan starts from scratch.</p>`;document.getElementById('repo_start').valueAsDate=new Date();document.getElementById('repo_total').value='';document.getElementById('repo_inst').value=k.installment_amount?Number(k.installment_amount).toLocaleString('en-NG'):'';document.getElementById('repo_schedule').value=k.schedule||'3days';document.getElementById('repo_batch').value=k.batch||'';['repo_driver','repo_phone','repo_phone2','repo_address','repo_guarantor','repo_gphone','repo_gaddress','repo_shorty','repo_shorty_phone','repo_notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('repo_grel').value='';document.getElementById('repoModal').classList.add('active');}
+async function openRepoModal(kekeId){if(!isAdmin()){toast('Admin access required.','error');return;}currentRepoKekeId=kekeId;const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===kekeId);if(!k)return;document.getElementById('repoTitle').textContent=`Reassign ${k.plate}`;document.getElementById('repoKekeInfo').innerHTML=`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Keke <strong>${k.plate}</strong> being reassigned from <strong>${k.driver_name}</strong>. Same keke details kept. New loan starts from scratch.</p>`;document.getElementById('repo_start').value=getTodayStr();document.getElementById('repo_total').value='';document.getElementById('repo_inst').value=k.installment_amount?Number(k.installment_amount).toLocaleString('en-NG'):'';document.getElementById('repo_schedule').value=k.schedule||'3days';document.getElementById('repo_batch').value=k.batch||'';['repo_driver','repo_phone','repo_phone2','repo_address','repo_guarantor','repo_gphone','repo_gaddress','repo_shorty','repo_shorty_phone','repo_notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('repo_grel').value='';document.getElementById('repoModal').classList.add('active');}
 function closeRepoModal(){document.getElementById('repoModal').classList.remove('active');currentRepoKekeId=null;}
 async function saveReassign(){
   if(!isAdmin()){toast('Admin access required.','error');return;}
@@ -1528,7 +1589,8 @@ async function deleteKeke(){
 //  EDIT PAYMENT (admin only)
 // ═══════════════════════════════════════════════════════════════
 let editingPaymentId=null;
-async function openEditPaymentModal(payId){if(!isAdmin()){toast('Admin access required.','error');return;}let payments=await dbGetPayments();const p=payments.find(x=>x.id===payId);if(!p)return;editingPaymentId=payId;document.getElementById('ep_amount').value=p.amount?Number(p.amount).toLocaleString('en-NG'):'';document.getElementById('ep_date').value=p.payment_date||'';document.getElementById('ep_balance').value=p.balance_after?Number(p.balance_after).toLocaleString('en-NG'):'';document.getElementById('ep_note').value=p.note||'';document.getElementById('editPaymentModal').classList.add('active');}
+async function openEditPaymentModal(payId){if(!isAdmin()){toast('Admin access required.','error');return;}let payments=await dbGetPayments();const p=payments.find(x=>x.id===payId);if(!p)return;editingPaymentId=payId;document.getElementById('ep_amount').value=p.amount?Number(p.amount).toLocaleString('en-NG'):'';document.getElementById('ep_date').value=p.payment_date||'';document.getElementById('ep_balance').value=p.balance_after?Number(p.balance_after).toLocaleString('en-NG'):'';document.getElementById('ep_note').value=p.note||'';const editModal=document.getElementById('editPaymentModal');editModal.classList.add('active');// Ensure edit modal sits above any open pay-log modal
+editModal.style.zIndex='600';}
 function closeEditPaymentModal(){document.getElementById('editPaymentModal').classList.remove('active');editingPaymentId=null;}
 async function saveEditPayment(){
   if(!isAdmin()){toast('Admin access required.','error');return;}
@@ -1587,7 +1649,7 @@ async function openDetail(id){
   const catLabel={payment:'💳 Payment',behaviour:'😤 Behaviour',accident:'🔧 Accident',missing:'❓ Missing',other:'📌 Other'};
   const docs = LOCAL.getDocuments().filter(d=>d.keke_id===id);
   document.getElementById('dmBody').innerHTML=`
-    ${k.status==='completed'?`<div class="completion-banner"><div class="cb-icon">🎉</div><div><h3>Loan Fully Paid!</h3><p>Keke transferred to ${k.driver_name} on ${new Date(k.completed_at).toLocaleDateString('en-NG',{day:'numeric',month:'long',year:'numeric'})}.</p></div></div>`:''}
+    ${k.status==='completed'?`<div class="completion-banner"><div class="cb-icon">🎉</div><div><h3>Loan Fully Paid!</h3><p>Keke transferred to ${k.driver_name} on ${fmtDateStr(k.completed_at,{day:'numeric',month:'long',year:'numeric'})}.</p></div></div>`:''}
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">${statusBadge(k.status)} ${batchBadge(k.batch)} ${isOnBreak(k.batch)?'<span class="badge" style="background:#fef3c7;color:#92400e">⏸️ On Break</span>':''}</div>
     <div class="detail-photos">
       <div class="detail-photo-box">${k.shorty_photo_url?`<img src="${k.shorty_photo_url}" alt="Shorty">`:'<div style="height:100px;display:flex;align-items:center;justify-content:center;font-size:2.5rem;background:var(--gray-100)">🔗</div>'}<div class="dpl">Shorty <button class="detail-photo-edit-btn" onclick="openPhotoUpdateModal('${k.id}','shorty')">📷 Update</button></div></div>
@@ -1609,9 +1671,9 @@ async function openDetail(id){
     ${k.notes?`<div style="margin-top:12px;font-size:.83rem;color:var(--gray-600);background:var(--gray-50);padding:10px 14px;border-radius:var(--radius-sm)"><strong>Notes:</strong> ${k.notes}</div>`:''}
     ${k.repossessed_from?`<div style="margin-top:8px;font-size:.82rem;background:#fee2e2;padding:9px 13px;border-radius:var(--radius-sm);color:#991b1b"><strong>⚠️ Repossessed from:</strong> ${k.repossessed_from}</div>`:''}
     <div class="section-divider" style="margin:16px 0 10px"><span>📋 Complaints (${complaints.length})</span></div>
-    ${complaints.length?'<div style="display:flex;flex-direction:column;gap:7px">'+complaints.slice(0,3).map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><span class="comp-date">${new Date(c.date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</span></div><div class="comp-text">${c.text}</div></div>`).join('')+(complaints.length>3?`<button class="btn btn-outline btn-sm" onclick="closeDetailModal();openComplaintModal('${k.id}')">View all ${complaints.length} complaints</button>`:'')+'</div>':'<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No complaints recorded.</div>'}
+    ${complaints.length?'<div style="display:flex;flex-direction:column;gap:7px">'+complaints.slice(0,3).map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><span class="comp-date">${fmtDateStr(c.date)}</span></div><div class="comp-text">${c.text}</div></div>`).join('')+(complaints.length>3?`<button class="btn btn-outline btn-sm" onclick="closeDetailModal();openComplaintModal('${k.id}')">View all ${complaints.length} complaints</button>`:'')+'</div>':'<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No complaints recorded.</div>'}
     <div class="section-divider" style="margin:16px 0 10px"><span>Payment History (${payments.length})</span></div>
-    ${!payments.length?'<div class="empty-state" style="padding:16px 0"><p>No payments yet</p></div>':'<div class="payment-log">'+payments.map(py=>{const hasOver=py.overpay_amount>0;return`<div class="payment-item"><div><div class="pi-amount${py.is_short?' pay-short':hasOver?' pay-over':''}">${hasOver?`${fmt(py.expected_amount)}<span class="pay-over-tag">+${fmt(py.overpay_amount)}</span>`:fmt(py.amount)}${py.is_short?' ⚠️':''}</div><div class="pi-note">${py.note||'Payment recorded'}</div></div><div class="pi-date">${new Date(py.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</div></div>`;}).join('')+'</div>'}
+    ${!payments.length?'<div class="empty-state" style="padding:16px 0"><p>No payments yet</p></div>':'<div class="payment-log">'+payments.map(py=>{const hasOver=py.overpay_amount>0;return`<div class="payment-item"><div><div class="pi-amount${py.is_short?' pay-short':hasOver?' pay-over':''}">${hasOver?`${fmt(py.expected_amount)}<span class="pay-over-tag">+${fmt(py.overpay_amount)}</span>`:fmt(py.amount)}${py.is_short?' ⚠️':''}</div><div class="pi-note">${py.note||'Payment recorded'}</div></div><div class="pi-date">${fmtDateStr(py.payment_date)}</div></div>`;}).join('')+'</div>'}
     <div class="section-divider" style="margin:16px 0 10px"><span>📁 Keke Documents (${docs.length})</span><button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openDocumentsModal('${k.id}')">➕ Add Document</button></div>
     <div id="dmDocList">${renderDocList(docs, k.id)}</div>`;
   document.getElementById('detailModal').classList.add('active');
@@ -1621,7 +1683,7 @@ function closeDetailModal(){document.getElementById('detailModal').classList.rem
 function renderDocList(docs, kekeId) {
   if(!docs.length) return '<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No documents uploaded yet. Click ➕ Add Document above to upload keke papers, permits, IDs etc.</div>';
   const typeIcon = t => /jpg|jpeg|png|gif|webp/.test(t||'')?'🖼️':t==='pdf'||t?.includes('pdf')?'📄':t?.includes('doc')?'📝':'📎';
-  return '<div class="doc-list">'+docs.map(d=>`<div class="doc-item"><div class="doc-icon">${typeIcon(d.type||d.name)}</div><div class="doc-info"><div class="doc-name">${d.name||'Document'}</div><div class="doc-meta">${d.type||''} · Uploaded ${new Date(d.uploaded_at).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})} by ${d.uploaded_by||'?'}</div></div><div class="doc-actions"><a href="${d.dataUrl||d.data_url}" download="${d.name||'document'}" class="btn btn-primary btn-sm" style="text-decoration:none">⬇️</a>${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocAndRefresh('${d.id}','${kekeId}')">✕</button>`:''}</div></div>`).join('')+'</div>';
+  return '<div class="doc-list">'+docs.map(d=>`<div class="doc-item"><div class="doc-icon">${typeIcon(d.type||d.name)}</div><div class="doc-info"><div class="doc-name">${d.name||'Document'}</div><div class="doc-meta">${d.type||''} · Uploaded ${fmtDateStr(d.uploaded_at)} by ${d.uploaded_by||'?'}</div></div><div class="doc-actions"><a href="${d.dataUrl||d.data_url}" download="${d.name||'document'}" class="btn btn-primary btn-sm" style="text-decoration:none">⬇️</a>${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocAndRefresh('${d.id}','${kekeId}')">✕</button>`:''}</div></div>`).join('')+'</div>';
 }
 function deleteDocAndRefresh(docId, kekeId) {
   if(!isAdmin()){toast('Admin access required.','error');return;}
@@ -1665,9 +1727,9 @@ async function downloadAllPaymentsPDF(){
   if(to)payments=payments.filter(p=>p.payment_date<=to);
   if(!payments.length){toast('No payments in selected range.','error');return;}
   const totalAmt=payments.reduce((s,p)=>s+Number(p.amount),0),drivers=new Set(payments.map(p=>p.driver_name)).size;
-  const dateStr=new Date().toLocaleDateString('en-NG',{day:'numeric',month:'long',year:'numeric'});
+  const dateStr=fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const rangeNote=(from||to)?`${from||'start'} → ${to||'today'}`:'All Time';
-  const rows=payments.map(p=>`<tr><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td><strong>${p.driver_name}</strong></td><td>${p.plate}</td><td>${p.batch?'Batch '+p.batch:''}</td><td class="${p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join('');
+  const rows=payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td><strong>${p.driver_name}</strong></td><td>${p.plate}</td><td>${p.batch?'Batch '+p.batch:''}</td><td class="${p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join('');
   const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Payment Records</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Generated: ${dateStr}</div></div><div class="hdr-r">${payments.length} records<br><strong style="color:#1a7a3c;font-size:1rem">${fmt(totalAmt)}</strong></div></div>${(from||to)?`<div class="filter-note">📅 Period: <strong>${rangeNote}</strong></div>`:''}<div class="stats"><div class="stat"><div class="lbl">Records</div><div class="val">${payments.length}</div></div><div class="stat"><div class="lbl">Total Collected</div><div class="val g">${fmt(totalAmt)}</div></div><div class="stat"><div class="lbl">Drivers</div><div class="val">${drivers}</div></div></div><table><thead><tr><th>Date</th><th>Driver</th><th>Plate</th><th>Batch</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
   openPDF(html,'Payment Records — Maymoon Mainstream Ltd');
 }
@@ -1681,9 +1743,9 @@ async function buildDriverPaymentStatementPDF(kekeId, from, to){
   if(from)payments=payments.filter(p=>p.payment_date>=from);
   if(to)payments=payments.filter(p=>p.payment_date<=to);
   const periodTotal=payments.reduce((s,p)=>s+Number(p.amount),0),bal=k.total_loan-k.paid;
-  const dateStr=new Date().toLocaleDateString('en-NG',{day:'numeric',month:'long',year:'numeric'});
+  const dateStr=fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const rangeNote=(from||to)?`${from||'start'} → ${to||'today'}`:'All Time';
-  const rows=payments.length?payments.map(p=>`<tr><td>${new Date(p.payment_date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td class="${p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;padding:20px;color:#adb5bd">No payments in selected date range</td></tr>';
+  const rows=payments.length?payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td class="${p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;padding:20px;color:#adb5bd">No payments in selected date range</td></tr>';
   const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Driver Payment Statement</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Period: ${rangeNote} · Generated: ${dateStr}</div></div><div class="hdr-r">Plate: <strong>${k.plate}</strong>${k.pt_number?'<br>PT: '+k.pt_number:''}<br>Batch ${k.batch||'—'}</div></div><div class="info-grid"><div><strong>Driver:</strong> ${k.driver_name}</div><div><strong>Phone:</strong> ${k.driver_phone}${k.driver_alt_phone?' / '+k.driver_alt_phone:''}</div><div><strong>Shorty:</strong> ${k.shorty_name||'—'}</div><div><strong>Shorty Phone:</strong> ${k.shorty_phone||'—'}</div><div><strong>Address:</strong> ${k.driver_address||'—'}</div><div><strong>Schedule:</strong> ${schedLabel(k.schedule)} — ${fmt(k.installment_amount)}</div></div><div class="stats"><div class="stat"><div class="lbl">Total Loan</div><div class="val">${fmt(k.total_loan)}</div></div><div class="stat"><div class="lbl">Paid (all time)</div><div class="val g">${fmt(k.paid)}</div></div><div class="stat"><div class="lbl">Balance</div><div class="val ${bal<=0?'g':'r'}">${bal<=0?'CLEARED':fmt(bal)}</div></div></div>${(from||to)?`<div class="filter-note">📅 ${rangeNote} — ${payments.length} record(s), ${fmt(periodTotal)}</div>`:''}<table><thead><tr><th>Date</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
   openPDF(html,`Statement — ${k.driver_name} (${k.plate})`);
 }
@@ -1716,13 +1778,13 @@ function getBatchPaymentDates(batch, numDates) {
 }
 
 function isBatchPaymentDay(batch) {
-  const today = new Date().toISOString().slice(0,10);
+  const today = getTodayStr();
   const dates = getBatchPaymentDates(batch, 500);
   return dates.includes(today);
 }
 
 function renderBatchPaymentAlerts() {
-  const today = new Date().toISOString().slice(0,10);
+  const today = getTodayStr();
   const now = new Date();
   const isPast4pm = now.getHours()>=16;
   const kekes = LOCAL.getKekes();
@@ -1784,7 +1846,7 @@ function renderBatchPaymentAlerts() {
     if(upcoming){
       const daysUntil=Math.ceil((new Date(upcoming)-Date.now())/86400000);
       nextHtml+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--gray-50);border-radius:var(--radius-sm);margin-bottom:6px;font-size:.83rem">
-        ${batchBadge(batch)}<span>Next payment day: <strong>${new Date(upcoming).toLocaleDateString('en-NG',{weekday:'short',day:'numeric',month:'short'})}</strong></span>
+        ${batchBadge(batch)}<span>Next payment day: <strong>${fmtDateStr(upcoming,{weekday:'short',day:'numeric',month:'short'})}</strong></span>
         <span class="badge badge-gray">${daysUntil===1?'Tomorrow':daysUntil+' days'}</span>
       </div>`;
     }
@@ -1843,11 +1905,11 @@ async function renderMaintenance() {
         ${overdue?'<span class="badge badge-red">🔧 Service Overdue</span>':'<span class="badge badge-green">✅ Up to Date</span>'}
       </div>
       <div class="maint-status-row">
-        ${svc.lastDate?`<span>Last service: <strong>${new Date(svc.lastDate).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</strong></span><span>${svc.daysSince} days ago</span>`:
+        ${svc.lastDate?`<span>Last service: <strong>${fmtDateStr(svc.lastDate)}</strong></span><span>${svc.daysSince} days ago</span>`:
         `<span style="color:var(--red)">⚠️ Never serviced</span>`}
       </div>
       ${svc.lastCondition?`<div style="margin-top:6px;font-size:.8rem">Last condition: <strong>${condLabel[svc.lastCondition]||svc.lastCondition}</strong></div>`:''}
-      ${records.slice(0,2).map(r=>`<div class="maint-record"><span class="maint-rec-date">${new Date(r.date).toLocaleDateString('en-NG',{day:'numeric',month:'short'})}</span><span>${condLabel[r.condition]||r.condition}</span><span>${r.serviced==='yes'?'✅ Serviced':'❌ Not serviced'}</span>${r.notes?`<span style="color:var(--gray-500);font-size:.77rem;grid-column:1/-1">${r.notes}</span>`:''}</div>`).join('')}
+      ${records.slice(0,2).map(r=>`<div class="maint-record"><span class="maint-rec-date">${fmtDateStr(r.date,{day:'numeric',month:'short'})}</span><span>${condLabel[r.condition]||r.condition}</span><span>${r.serviced==='yes'?'✅ Serviced':'❌ Not serviced'}</span>${r.notes?`<span style="color:var(--gray-500);font-size:.77rem;grid-column:1/-1">${r.notes}</span>`:''}</div>`).join('')}
       <div class="maint-footer">
         <button class="btn btn-primary btn-sm" onclick="openServiceModal('${k.id}')">🔧 Log Service</button>
         <button class="btn btn-outline btn-sm" onclick="openServiceModalAndDownload('${k.id}')">⬇️ History PDF</button>
@@ -1863,7 +1925,7 @@ function openServiceModal(kekeId) {
   const k = LOCAL.getKekes().find(x=>x.id===kekeId); if(!k) return;
   document.getElementById('serviceModalTitle').textContent = `🔧 Service Log — ${k.driver_name} (${k.plate})`;
   document.getElementById('serviceKekeInfo').innerHTML = `<svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><p>Plate: <strong>${k.plate}</strong> · Driver: <strong>${k.driver_name}</strong> · ${batchBadge(k.batch)} · Service expected every <strong>3 weeks</strong>.</p>`;
-  document.getElementById('svc_date').valueAsDate = new Date();
+  document.getElementById('svc_date').value=getTodayStr();
   document.getElementById('svc_condition').value = 'good';
   document.getElementById('svc_done').value = 'yes';
   document.getElementById('svc_mechanic').value = '';
@@ -1885,7 +1947,7 @@ function renderServiceHistory() {
   if(!records.length){container.innerHTML='<div class="empty-state" style="padding:16px 0"><p>No service records yet.</p></div>';return;}
   container.innerHTML=`<div style="font-size:.76rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${records.length} Service Record(s)</div>`+
     records.map(r=>`<div class="maint-history-item">
-      <div class="mhi-row"><strong>${new Date(r.date).toLocaleDateString('en-NG',{day:'numeric',month:'long',year:'numeric'})}</strong><span class="${r.serviced==='yes'?'mhi-badge-green':'mhi-badge-red'}">${r.serviced==='yes'?'✅ Serviced':'❌ Not Serviced'}</span></div>
+      <div class="mhi-row"><strong>${fmtDateStr(r.date,{day:'numeric',month:'long',year:'numeric'})}</strong><span class="${r.serviced==='yes'?'mhi-badge-green':'mhi-badge-red'}">${r.serviced==='yes'?'✅ Serviced':'❌ Not Serviced'}</span></div>
       <div class="mhi-row"><span>Condition: <strong>${condLabel[r.condition]||r.condition}</strong></span>${r.mechanic?`<span>👨‍🔧 ${r.mechanic}</span>`:''}</div>
       ${r.notes?`<div style="font-size:.8rem;color:var(--gray-600);margin-top:4px">📝 ${r.notes}</div>`:''}
       ${r.recorded_by?`<div style="font-size:.71rem;color:var(--gray-400);margin-top:3px">By: ${r.recorded_by}</div>`:''}
@@ -1904,7 +1966,7 @@ function saveServiceRecord() {
   _sbSaveServiceRecord(svcEntry);
   const k = LOCAL.getKekes().find(x=>x.id===currentServiceKekeId);
   logActivity(`Service logged: ${k?.plate||''}`, 'edit', `Driver: ${k?.driver_name||''} | Condition: ${condition} | Serviced: ${serviced} | By: ${currentUser?.name||'?'}`);
-  document.getElementById('svc_date').valueAsDate = new Date();
+  document.getElementById('svc_date').value=getTodayStr();
   document.getElementById('svc_notes').value = '';
   document.getElementById('svc_mechanic').value = '';
   renderServiceHistory();
@@ -1927,10 +1989,10 @@ function downloadServiceHistoryPDF() {
   if(!currentServiceKekeId){toast('No keke selected.','error');return;}
   const k = LOCAL.getKekes().find(x=>x.id===currentServiceKekeId); if(!k) return;
   const records = LOCAL.getServiceRecords().filter(r=>r.keke_id===currentServiceKekeId).sort((a,b)=>new Date(b.date)-new Date(a.date));
-  const dateStr = new Date().toLocaleDateString('en-NG',{day:'numeric',month:'long',year:'numeric'});
+  const dateStr = fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const condLabel={good:'✅ Good',fair:'⚠️ Fair',poor:'🔴 Poor'};
   const rows = records.length
-    ? records.map(r=>`<tr><td>${new Date(r.date).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})}</td><td class="${r.serviced==='yes'?'am':'am-short'}">${r.serviced==='yes'?'✅ Serviced':'❌ Not Serviced'}</td><td>${condLabel[r.condition]||r.condition}</td><td>${r.mechanic||'—'}</td><td>${r.notes||'—'}</td><td style="font-size:.75em;color:#adb5bd">${r.recorded_by||'?'}</td></tr>`).join('')
+    ? records.map(r=>`<tr><td>${fmtDateStr(r.date)}</td><td class="${r.serviced==='yes'?'am':'am-short'}">${r.serviced==='yes'?'✅ Serviced':'❌ Not Serviced'}</td><td>${condLabel[r.condition]||r.condition}</td><td>${r.mechanic||'—'}</td><td>${r.notes||'—'}</td><td style="font-size:.75em;color:#adb5bd">${r.recorded_by||'?'}</td></tr>`).join('')
     : '<tr><td colspan="6" style="text-align:center;padding:20px;color:#adb5bd">No service records yet</td></tr>';
   const html = `<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Service &amp; Maintenance History</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Vehicle: ${k.plate} &nbsp;·&nbsp; Driver: ${k.driver_name} &nbsp;·&nbsp; Batch ${k.batch||'—'}</div></div><div class="hdr-r">${records.length} record(s)<br><span style="font-size:.75rem;color:#6c757d">Every 3 weeks</span></div></div><div class="stats"><div class="stat"><div class="lbl">Total Records</div><div class="val">${records.length}</div></div><div class="stat"><div class="lbl">Serviced</div><div class="val g">${records.filter(r=>r.serviced==='yes').length}</div></div><div class="stat"><div class="lbl">Not Serviced</div><div class="val r">${records.filter(r=>r.serviced==='no').length}</div></div></div><table><thead><tr><th>Date</th><th>Status</th><th>Condition</th><th>Mechanic</th><th>Notes</th><th>Recorded By</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd · Service Records for ${k.plate}</span><span>${dateStr}</span></div>`;
   openPDF(html, `Service History — ${k.plate} (${k.driver_name})`);
@@ -1962,7 +2024,7 @@ function renderDocumentsList() {
       <div class="doc-icon">${icon}</div>
       <div class="doc-info">
         <div class="doc-name">${d.name||'Document'}</div>
-        <div class="doc-meta">${d.type||''} &bull; Uploaded: ${new Date(d.uploaded_at).toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})} &bull; By: ${d.uploaded_by||'?'}</div>
+        <div class="doc-meta">${d.type||''} &bull; Uploaded: ${fmtDateStr(d.uploaded_at)} &bull; By: ${d.uploaded_by||'?'}</div>
       </div>
       <div class="doc-actions">
         ${d.dataUrl?`<a href="${d.dataUrl}" download="${d.name||'document'}" class="btn btn-outline btn-sm" style="text-decoration:none">⬇️ Download</a>`:''}
