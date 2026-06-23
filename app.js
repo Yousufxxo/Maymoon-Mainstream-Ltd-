@@ -991,16 +991,20 @@ async function refreshDashboard() {
 }
 
 function getOverdueDrivers(kekes,payments) {
-  const now=Date.now(), three=3*24*60*60*1000;
+  const now=Date.now();
+  // Use each driver's actual schedule to determine overdue threshold
+  const schedDays={daily:1,'3days':3,'5days':5,weekly:7};
   return kekes.filter(k=>{
     if(k.status!=='active')return false;
     if(isOnBreak(k.batch))return false;
+    const days=schedDays[k.schedule]||1; // default to daily if unknown
+    const threshold=days*24*60*60*1000;
     const kp=payments.filter(p=>p.keke_id===k.id);
-    if(!kp.length)return(now-new Date(k.start_date||k.created_at).getTime())>three;
+    if(!kp.length)return(now-new Date(k.start_date||k.created_at).getTime())>threshold;
     const latest=kp.reduce((a,b)=>new Date(a.payment_date)>new Date(b.payment_date)?a:b);
     // Parse payment_date safely (YYYY-MM-DD as local date, not UTC)
     const latestLocal=parseDateStr(latest.payment_date);
-    return latestLocal?(now-latestLocal.getTime())>three:(now-new Date(latest.payment_date).getTime())>three;
+    return latestLocal?(now-latestLocal.getTime())>threshold:(now-new Date(latest.payment_date).getTime())>threshold;
   });
 }
 
@@ -1456,16 +1460,19 @@ async function openPaymentModal(id){
   _currentInstallment=k.installment_amount||0;
   document.getElementById('pmTitle').textContent=`Record Payment — ${k.driver_name} (${k.plate})`;
   document.getElementById('pm_amount').value=k.installment_amount ? Number(k.installment_amount).toLocaleString('en-NG') : '';
+  // Set date to today immediately (sync), then update once async fetch confirms
   document.getElementById('pm_date').value=getTodayStr();
+  fetchTodayStr().then(d=>{ const el=document.getElementById('pm_date'); if(el&&el.closest('.modal-overlay.active')) el.value=d; });
   document.getElementById('pm_note').value='';
   document.getElementById('pmShortWarning').style.display='none';
   document.getElementById('pmOverWarning').style.display='none';
   const bal=k.total_loan-k.paid;
   document.getElementById('pmLoanSummary').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center"><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Expected</div><div style="font-weight:800;color:var(--gray-800)">${fmt(k.installment_amount)}</div></div><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Paid So Far</div><div style="font-weight:800;color:var(--green)">${fmt(k.paid)}</div></div><div><div style="font-size:.7rem;color:var(--gray-400);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Balance</div><div style="font-weight:800;color:var(--red)">${fmt(bal)}</div></div></div>`;
   document.getElementById('paymentModal').classList.add('active');
+  // Draft saves/restores amount and note only — date is always set to today on open
   const draftKey = 'payment_' + id;
-  wireAutosave(draftKey, ['pm_amount','pm_date','pm_note']);
-  offerDraftRestore(draftKey, ['pm_amount','pm_date','pm_note'], 'payment entry');
+  wireAutosave(draftKey, ['pm_amount','pm_note']);
+  offerDraftRestore(draftKey, ['pm_amount','pm_note'], 'payment entry');
 }
 function checkShortPayment(input){
   const v=parseFmt(input);
@@ -1492,6 +1499,10 @@ async function savePayment(){
   const btn=document.getElementById('savePayBtn'); btn.innerHTML='<div class="spinner"></div> Saving...'; btn.disabled=true;
   try{
     const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===currentKekeId); if(!k)throw new Error('Keke not found');
+    // Duplicate guard: block if identical payment already recorded in last 10 seconds
+    const recent=(CACHE.payments||[]).filter(p=>p.keke_id===k.id&&p.payment_date===date&&Number(p.amount)===amount);
+    const lastRecorded=recent.length?Math.max(...recent.map(p=>new Date(p.recorded_at||0).getTime())):0;
+    if(recent.length&&(Date.now()-lastRecorded)<10000){toast('⚠️ Duplicate detected — this payment was just recorded.','error');_savingPayment=false;btn.innerHTML='<svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Record Payment';btn.disabled=false;return;}
     const isShort=amount<k.installment_amount;
     const overpayAmount=Math.max(0,amount-k.installment_amount);
     const actual=Math.min(amount,k.total_loan-k.paid),newPaid=k.paid+actual,newBal=k.total_loan-newPaid,isComplete=newBal<=0;
