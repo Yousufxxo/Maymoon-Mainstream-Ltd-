@@ -635,7 +635,14 @@ function fmtInput(el) {
   if (isNaN(num)) { el.value = raw.replace(/[^\d.]/g, ''); return; }
   // Preserve trailing decimal point while typing
   const hasDot = raw.endsWith('.');
-  el.value = num.toLocaleString('en-NG') + (hasDot ? '.' : '');
+  // Track cursor distance from the END before reformatting so it stays put
+  const selEnd = el.selectionEnd;
+  const oldLen = el.value.length;
+  const newVal = num.toLocaleString('en-NG') + (hasDot ? '.' : '');
+  el.value = newVal;
+  // Restore cursor at the same offset from the end
+  const newPos = newVal.length - (oldLen - selEnd);
+  el.setSelectionRange(newPos, newPos);
 }
 // Parse a comma-formatted input back to a plain number
 function parseFmt(el) {
@@ -1460,9 +1467,14 @@ async function openPaymentModal(id){
   _currentInstallment=k.installment_amount||0;
   document.getElementById('pmTitle').textContent=`Record Payment — ${k.driver_name} (${k.plate})`;
   document.getElementById('pm_amount').value=k.installment_amount ? Number(k.installment_amount).toLocaleString('en-NG') : '';
-  // Set date to today immediately (sync), then update once async fetch confirms
-  document.getElementById('pm_date').value=getTodayStr();
-  fetchTodayStr().then(d=>{ const el=document.getElementById('pm_date'); if(el&&el.closest('.modal-overlay.active')) el.value=d; });
+  // Set date to today immediately (sync), then update once async fetch confirms —
+  // but only if the user hasn't already changed the field away from the initial value.
+  const syncToday = getTodayStr();
+  document.getElementById('pm_date').value = syncToday;
+  fetchTodayStr().then(d => {
+    const el = document.getElementById('pm_date');
+    if (el && el.closest('.modal-overlay.active') && el.value === syncToday) el.value = d;
+  });
   document.getElementById('pm_note').value='';
   document.getElementById('pmShortWarning').style.display='none';
   document.getElementById('pmOverWarning').style.display='none';
@@ -1504,8 +1516,8 @@ async function savePayment(){
     const lastRecorded=recent.length?Math.max(...recent.map(p=>new Date(p.recorded_at||0).getTime())):0;
     if(recent.length&&(Date.now()-lastRecorded)<10000){toast('⚠️ Duplicate detected — this payment was just recorded.','error');_savingPayment=false;btn.innerHTML='<svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Record Payment';btn.disabled=false;return;}
     const isShort=amount<k.installment_amount;
-    const overpayAmount=Math.max(0,amount-k.installment_amount);
     const actual=Math.min(amount,k.total_loan-k.paid),newPaid=k.paid+actual,newBal=k.total_loan-newPaid,isComplete=newBal<=0;
+    const overpayAmount=Math.max(0,actual-k.installment_amount);
     await dbUpdateKeke(k.id,{paid:newPaid,status:isComplete?'completed':'active',completed_at:isComplete?new Date().toISOString():null});
     await dbSavePayment({id:uid(),keke_id:k.id,plate:k.plate,driver_name:k.driver_name,batch:k.batch,amount:actual,balance_after:Math.max(0,newBal),payment_date:date,note,is_short:isShort,expected_amount:k.installment_amount,overpay_amount:overpayAmount,recorded_at:new Date().toISOString()});
     logActivity(`Payment: ${k.plate}`,'payment',`Driver: ${k.driver_name} | ${fmt(actual)}${isShort?' [SHORT]':overpayAmount>0?' [OVER +'+fmt(overpayAmount)+']':''} | Bal: ${fmt(Math.max(0,newBal))} | By: ${currentUser?.name||'?'}`);
