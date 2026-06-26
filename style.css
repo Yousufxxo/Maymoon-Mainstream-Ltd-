@@ -325,8 +325,10 @@
 .driver-status.completed { background:#ede9fe;color:#5b21b6; }
 
 /* Short payment (orange) */
-.pay-short { color:#c2410c!important;font-weight:700; }
+.pay-short { color:#ea580c!important;font-weight:700; }
 .pay-short-row td { background:#fff7ed!important; }
+.pay-zero { color:#dc2626!important;font-weight:700; }
+.pay-zero-row td { background:#fff1f2!important; }
 
 /* Complaint log */
 .complaint-item { padding:12px 14px;border-radius:var(--radius-sm);background:var(--gray-50);border-left:3px solid var(--gray-300);margin-bottom:8px; }

@@ -1367,10 +1367,13 @@ function renderDriverPayLogModal(){
   const actionsCol=isAdmin()?(id=>`<button class="btn btn-outline btn-sm" onclick="openEditPaymentModal('${id}')">✏️</button> <button class="btn btn-danger btn-sm" onclick="deletePaymentById('${id}')">🗑️</button>`):()=>'';
   tbody.innerHTML=payments.map(p=>{
     const hasOver=p.overpay_amount>0;
+    const isZero=p.is_short&&Number(p.amount)===0;
     const amountCell=hasOver
       ?`<span style="font-weight:700">${fmt(p.expected_amount)}</span><span class="pay-over-tag">+${fmt(p.overpay_amount)}</span>`
       :`${fmt(p.amount)}${p.is_short?' ⚠️':''}`;
-    return`<tr class="${p.is_short?'pay-short-row':hasOver?'pay-over-row':''}"><td>${fmtDateStr(p.payment_date)}</td><td class="${p.is_short?'pay-short':hasOver?'pay-over':''}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
+    const rowClass=isZero?'pay-zero-row':p.is_short?'pay-short-row':hasOver?'pay-over-row':'';
+    const cellClass=isZero?'pay-zero':p.is_short?'pay-short':hasOver?'pay-over':'';
+    return`<tr class="${rowClass}"><td>${fmtDateStr(p.payment_date)}</td><td class="${cellClass}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
   }).join('');
 }
 
@@ -1440,7 +1443,10 @@ async function renderPayments(){
     const amountCell=hasOver
       ?`<span style="font-weight:700">${fmt(p.expected_amount)}</span><span class="pay-over-tag">+${fmt(p.overpay_amount)}</span>`
       :`${fmt(p.amount)}${p.is_short?' ⚠️':''}`;
-    return`<tr class="${p.is_short?'pay-short-row':hasOver?'pay-over-row':''}"><td>${fmtDateStr(p.payment_date)}</td><td><strong>${p.driver_name}</strong></td><td><span class="badge badge-gray">${p.plate}</span></td><td>${batchBadge(p.batch)}</td><td class="${p.is_short?'pay-short':hasOver?'pay-over':''}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
+    const isZero2=p.is_short&&Number(p.amount)===0;
+    const rowClass2=isZero2?'pay-zero-row':p.is_short?'pay-short-row':hasOver?'pay-over-row':'';
+    const cellClass2=isZero2?'pay-zero':p.is_short?'pay-short':hasOver?'pay-over':'';
+    return`<tr class="${rowClass2}"><td>${fmtDateStr(p.payment_date)}</td><td><strong>${p.driver_name}</strong></td><td><span class="badge badge-gray">${p.plate}</span></td><td>${batchBadge(p.batch)}</td><td class="${cellClass2}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
   }).join('');
 }
 async function deletePaymentById(payId){if(!isAdmin()){toast('Admin access required','error');return;}if(!confirm('Delete this payment?'))return;editingPaymentId=payId;await deletePayment();}
@@ -1490,7 +1496,7 @@ function checkShortPayment(input){
   const v=parseFmt(input);
   const shortWarn=document.getElementById('pmShortWarning');
   const overWarn=document.getElementById('pmOverWarning');
-  shortWarn.style.display=(v>0&&v<_currentInstallment)?'':'none';
+  shortWarn.style.display=(v>=0&&v<_currentInstallment)?'':'none';
   if(v>0&&v>_currentInstallment){
     const extra=v-_currentInstallment;
     document.getElementById('pmOverExtra').textContent='₦'+Number(extra).toLocaleString('en-NG');
@@ -1507,7 +1513,8 @@ async function savePayment(){
   const amount=parseFmt(document.getElementById('pm_amount'));
   const date=document.getElementById('pm_date').value;
   const note=document.getElementById('pm_note').value.trim();
-  if(!amount||!date){toast('Enter amount and date.','error');_savingPayment=false;return;}
+  if(amount<0||!date){toast('Enter a valid amount and date.','error');_savingPayment=false;return;}
+  if(amount===0&&!confirm(`Record a ₦0 (zero) payment for this driver? This will appear in red.`)){_savingPayment=false;return;}
   const btn=document.getElementById('savePayBtn'); btn.innerHTML='<div class="spinner"></div> Saving...'; btn.disabled=true;
   try{
     const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===currentKekeId); if(!k)throw new Error('Keke not found');
@@ -1515,7 +1522,7 @@ async function savePayment(){
     const recent=(CACHE.payments||[]).filter(p=>p.keke_id===k.id&&p.payment_date===date&&Number(p.amount)===amount);
     const lastRecorded=recent.length?Math.max(...recent.map(p=>new Date(p.recorded_at||0).getTime())):0;
     if(recent.length&&(Date.now()-lastRecorded)<10000){toast('⚠️ Duplicate detected — this payment was just recorded.','error');_savingPayment=false;btn.innerHTML='<svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Record Payment';btn.disabled=false;return;}
-    const isShort=amount<k.installment_amount;
+    const isShort=amount<=0||amount<k.installment_amount;
     const actual=Math.min(amount,k.total_loan-k.paid),newPaid=k.paid+actual,newBal=k.total_loan-newPaid,isComplete=newBal<=0;
     const overpayAmount=Math.max(0,actual-k.installment_amount);
     await dbUpdateKeke(k.id,{paid:newPaid,status:isComplete?'completed':'active',completed_at:isComplete?new Date().toISOString():null});
@@ -1696,7 +1703,7 @@ async function openDetail(id){
     <div class="section-divider" style="margin:16px 0 10px"><span>📋 Complaints (${complaints.length})</span></div>
     ${complaints.length?'<div style="display:flex;flex-direction:column;gap:7px">'+complaints.slice(0,3).map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><span class="comp-date">${fmtDateStr(c.date)}</span></div><div class="comp-text">${c.text}</div></div>`).join('')+(complaints.length>3?`<button class="btn btn-outline btn-sm" onclick="closeDetailModal();openComplaintModal('${k.id}')">View all ${complaints.length} complaints</button>`:'')+'</div>':'<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No complaints recorded.</div>'}
     <div class="section-divider" style="margin:16px 0 10px"><span>Payment History (${payments.length})</span></div>
-    ${!payments.length?'<div class="empty-state" style="padding:16px 0"><p>No payments yet</p></div>':'<div class="payment-log">'+payments.map(py=>{const hasOver=py.overpay_amount>0;return`<div class="payment-item"><div><div class="pi-amount${py.is_short?' pay-short':hasOver?' pay-over':''}">${hasOver?`${fmt(py.expected_amount)}<span class="pay-over-tag">+${fmt(py.overpay_amount)}</span>`:fmt(py.amount)}${py.is_short?' ⚠️':''}</div><div class="pi-note">${py.note||'Payment recorded'}</div></div><div class="pi-date">${fmtDateStr(py.payment_date)}</div></div>`;}).join('')+'</div>'}
+    ${!payments.length?'<div class="empty-state" style="padding:16px 0"><p>No payments yet</p></div>':'<div class="payment-log">'+payments.map(py=>{const hasOver=py.overpay_amount>0;const isZeroM=py.is_short&&Number(py.amount)===0;return`<div class="payment-item"><div><div class="pi-amount${isZeroM?' pay-zero':py.is_short?' pay-short':hasOver?' pay-over':''}">${hasOver?`${fmt(py.expected_amount)}<span class="pay-over-tag">+${fmt(py.overpay_amount)}</span>`:fmt(py.amount)}${py.is_short?' ⚠️':''}</div><div class="pi-note">${py.note||'Payment recorded'}</div></div><div class="pi-date">${fmtDateStr(py.payment_date)}</div></div>`;}).join('')+'</div>'}
     <div class="section-divider" style="margin:16px 0 10px"><span>📁 Keke Documents (${docs.length})</span><button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openDocumentsModal('${k.id}')">➕ Add Document</button></div>
     <div id="dmDocList">${renderDocList(docs, k.id)}</div>`;
   document.getElementById('detailModal').classList.add('active');
@@ -1740,8 +1747,24 @@ function renderActivityLog(){
 // ═══════════════════════════════════════════════════════════════
 //  PDF EXPORTS
 // ═══════════════════════════════════════════════════════════════
-function pdfStyles(){return `<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;color:#212529;background:#fff;padding:32px;font-size:13px}h1{font-size:1.2rem;font-weight:800;color:#D0021B}.co{font-size:.8rem;color:#6c757d;margin-bottom:2px}.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;padding-bottom:16px;border-bottom:2px solid #D0021B}.hdr-r{text-align:right;font-size:.78rem;color:#6c757d}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}.stat{background:#f8f9fa;border-radius:8px;padding:12px;text-align:center}.stat .lbl{font-size:.65rem;font-weight:700;color:#adb5bd;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}.stat .val{font-size:1rem;font-weight:800}.val.g{color:#1a7a3c}.val.r{color:#D0021B}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;background:#f8f9fa;padding:12px;border-radius:8px;font-size:.82rem;line-height:1.9}table{width:100%;border-collapse:collapse;font-size:.82rem}thead th{background:#212529;color:#fff;padding:8px 11px;text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.5px}tbody td{padding:8px 11px;border-bottom:1px solid #e9ecef}tbody tr:nth-child(even){background:#f8f9fa}.am{color:#1a7a3c;font-weight:700}.am-short{color:#c2410c;font-weight:700}.bal{color:#D0021B}.clr{color:#1a7a3c;font-weight:700}.ftr{margin-top:24px;padding-top:12px;border-top:1px solid #e9ecef;font-size:.72rem;color:#adb5bd;display:flex;justify-content:space-between}.filter-note{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:14px;font-size:.78rem}h3{font-size:.9rem;margin:16px 0 8px}@media print{body{padding:16px}}</style>`;}
-function openPDF(html,title){const w=window.open('','_blank','width=920,height=700');w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>${pdfStyles()}</head><body onload="setTimeout(()=>window.print(),350)">${html}</body></html>`);w.document.close();}
+function pdfStyles(){return `<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;color:#212529;background:#fff;padding:32px;font-size:13px}h1{font-size:1.2rem;font-weight:800;color:#D0021B}.co{font-size:.8rem;color:#6c757d;margin-bottom:2px}.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;padding-bottom:16px;border-bottom:2px solid #D0021B}.hdr-r{text-align:right;font-size:.78rem;color:#6c757d}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}.stat{background:#f8f9fa;border-radius:8px;padding:12px;text-align:center}.stat .lbl{font-size:.65rem;font-weight:700;color:#adb5bd;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}.stat .val{font-size:1rem;font-weight:800}.val.g{color:#1a7a3c}.val.r{color:#D0021B}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;background:#f8f9fa;padding:12px;border-radius:8px;font-size:.82rem;line-height:1.9}table{width:100%;border-collapse:collapse;font-size:.82rem}thead th{background:#212529;color:#fff;padding:8px 11px;text-align:left;font-size:.7rem;text-transform:uppercase;letter-spacing:.5px}tbody td{padding:8px 11px;border-bottom:1px solid #e9ecef}tbody tr:nth-child(even){background:#f8f9fa}.am{color:#1a7a3c;font-weight:700}.am-short{color:#ea580c;font-weight:700}.am-zero{color:#dc2626;font-weight:700}.bal{color:#D0021B}.clr{color:#1a7a3c;font-weight:700}.ftr{margin-top:24px;padding-top:12px;border-top:1px solid #e9ecef;font-size:.72rem;color:#adb5bd;display:flex;justify-content:space-between}.filter-note{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:8px 12px;margin-bottom:14px;font-size:.78rem}h3{font-size:.9rem;margin:16px 0 8px}@media print{body{padding:16px}}</style>`;}
+function openPDF(html,title){
+  // Build a full HTML document and open it in a new tab via a blob URL.
+  // This avoids popup-blocker issues (blob: URLs are not blocked) while still
+  // letting the browser's built-in print dialog handle the actual PDF save.
+  const fullHtml=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>${pdfStyles()}</head><body onload="setTimeout(()=>window.print(),350)">${html}</body></html>`;
+  const blob=new Blob([fullHtml],{type:'text/html'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.target='_blank';
+  a.rel='noopener';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Keep the URL alive for 60s so the tab can fully load before it's revoked
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+}
 
 async function downloadAllPaymentsPDF(){
   const from=document.getElementById('pdfFrom').value,to=document.getElementById('pdfTo').value;
@@ -1752,7 +1775,7 @@ async function downloadAllPaymentsPDF(){
   const totalAmt=payments.reduce((s,p)=>s+Number(p.amount),0),drivers=new Set(payments.map(p=>p.driver_name)).size;
   const dateStr=fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const rangeNote=(from||to)?`${from||'start'} → ${to||'today'}`:'All Time';
-  const rows=payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td><strong>${p.driver_name}</strong></td><td>${p.plate}</td><td>${p.batch?'Batch '+p.batch:''}</td><td class="${p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join('');
+  const rows=payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td><strong>${p.driver_name}</strong></td><td>${p.plate}</td><td>${p.batch?'Batch '+p.batch:''}</td><td class="${p.is_short&&Number(p.amount)===0?'am-zero':p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join('');
   const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Payment Records</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Generated: ${dateStr}</div></div><div class="hdr-r">${payments.length} records<br><strong style="color:#1a7a3c;font-size:1rem">${fmt(totalAmt)}</strong></div></div>${(from||to)?`<div class="filter-note">📅 Period: <strong>${rangeNote}</strong></div>`:''}<div class="stats"><div class="stat"><div class="lbl">Records</div><div class="val">${payments.length}</div></div><div class="stat"><div class="lbl">Total Collected</div><div class="val g">${fmt(totalAmt)}</div></div><div class="stat"><div class="lbl">Drivers</div><div class="val">${drivers}</div></div></div><table><thead><tr><th>Date</th><th>Driver</th><th>Plate</th><th>Batch</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
   openPDF(html,'Payment Records — Maymoon Mainstream Ltd');
 }
@@ -1768,7 +1791,7 @@ async function buildDriverPaymentStatementPDF(kekeId, from, to){
   const periodTotal=payments.reduce((s,p)=>s+Number(p.amount),0),bal=k.total_loan-k.paid;
   const dateStr=fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const rangeNote=(from||to)?`${from||'start'} → ${to||'today'}`:'All Time';
-  const rows=payments.length?payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td class="${p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;padding:20px;color:#adb5bd">No payments in selected date range</td></tr>';
+  const rows=payments.length?payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td class="${p.is_short&&Number(p.amount)===0?'am-zero':p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;padding:20px;color:#adb5bd">No payments in selected date range</td></tr>';
   const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Driver Payment Statement</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Period: ${rangeNote} · Generated: ${dateStr}</div></div><div class="hdr-r">Plate: <strong>${k.plate}</strong>${k.pt_number?'<br>PT: '+k.pt_number:''}<br>Batch ${k.batch||'—'}</div></div><div class="info-grid"><div><strong>Driver:</strong> ${k.driver_name}</div><div><strong>Phone:</strong> ${k.driver_phone}${k.driver_alt_phone?' / '+k.driver_alt_phone:''}</div><div><strong>Shorty:</strong> ${k.shorty_name||'—'}</div><div><strong>Shorty Phone:</strong> ${k.shorty_phone||'—'}</div><div><strong>Address:</strong> ${k.driver_address||'—'}</div><div><strong>Schedule:</strong> ${schedLabel(k.schedule)} — ${fmt(k.installment_amount)}</div></div><div class="stats"><div class="stat"><div class="lbl">Total Loan</div><div class="val">${fmt(k.total_loan)}</div></div><div class="stat"><div class="lbl">Paid (all time)</div><div class="val g">${fmt(k.paid)}</div></div><div class="stat"><div class="lbl">Balance</div><div class="val ${bal<=0?'g':'r'}">${bal<=0?'CLEARED':fmt(bal)}</div></div></div>${(from||to)?`<div class="filter-note">📅 ${rangeNote} — ${payments.length} record(s), ${fmt(periodTotal)}</div>`:''}<table><thead><tr><th>Date</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
   openPDF(html,`Statement — ${k.driver_name} (${k.plate})`);
 }
