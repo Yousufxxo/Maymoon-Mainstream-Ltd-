@@ -206,9 +206,45 @@ const sb = {
     'Authorization': 'Bearer ' + (_authToken || SUPABASE_KEY)
   }),
   async select(table, filter='') {
-    const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, { headers: { ...sb._h(), 'Prefer': 'return=representation' } });
+    // Fetches one page (up to the server's max_rows cap, usually 1000).
+    // Use sb.selectAll() when you need every row in a large table.
+    const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, {
+      headers: {
+        ...sb._h(),
+        'Prefer': 'return=representation',
+        'Range-Unit': 'items',
+        'Range': '0-999'
+      }
+    });
     if (!r.ok) throw new Error(`GET ${table}: ${await r.text()}`);
     return r.json();
+  },
+
+  // Paginates through ALL rows in a table by fetching 1000 at a time until
+  // the server returns fewer rows than the page size (meaning we've hit the end).
+  // PostgREST's max_rows setting caps each individual response at 1000, so
+  // a single Range header can't bypass this — we need to loop with offsets.
+  async selectAll(table, filter='') {
+    const PAGE = 1000;
+    let offset = 0, allRows = [];
+    while (true) {
+      const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}?${filter}`, {
+        headers: {
+          ...sb._h(),
+          'Prefer': 'return=representation',
+          'Range-Unit': 'items',
+          'Range': `${offset}-${offset + PAGE - 1}`
+        }
+      });
+      // 416 = "Range Not Satisfiable" — means offset is past the end of the table
+      if (r.status === 416) break;
+      if (!r.ok) throw new Error(`GET ${table}: ${await r.text()}`);
+      const page = await r.json();
+      allRows = allRows.concat(page);
+      if (page.length < PAGE) break; // last page — we're done
+      offset += PAGE;
+    }
+    return allRows;
   },
   async insert(table, row) {
     const r = await _sbFetch(`${SUPABASE_URL}/rest/v1/${table}`, { method:'POST', headers:{ ...sb._h(), 'Prefer':'return=representation' }, body:JSON.stringify(row) });
@@ -441,7 +477,7 @@ async function bootstrap() {
   try {
     const [kekes, payments, complaints, svcRecs, docs, logs, holiday, bsched] = await Promise.all([
       sb.select('keke_loans', 'order=created_at.desc'),
-      sb.select('keke_payments', 'order=payment_date.desc,recorded_at.desc'),
+      sb.selectAll('keke_payments', 'order=payment_date.desc'),
       sb.select('keke_complaints', 'order=created_at.desc'),
       sb.select('keke_service_records', 'order=created_at.desc'),
       sb.select('keke_documents', 'order=uploaded_at.desc'),
@@ -462,7 +498,9 @@ async function bootstrap() {
   } catch(e) {
     setSyncStatus('error');
     console.error('Supabase bootstrap failed:', e);
-    toast('⚠️ Supabase connection failed. Check SUPABASE_URL and SUPABASE_KEY in app.js', 'error');
+    toast('⚠️ Supabase connection failed — payments may not load. Check your connection and refresh.', 'error');
+    // Do NOT set _bootstrapped = true here — leave it false so the next
+    // call (e.g. navigating to Payments) will retry the full fetch automatically.
     CACHE.kekes          = CACHE.kekes          || [];
     CACHE.payments       = CACHE.payments       || [];
     CACHE.complaints     = CACHE.complaints     || [];
@@ -1353,7 +1391,8 @@ function closeDriverPayLogModal(){document.getElementById('driverPayLogModal').c
 function renderDriverPayLogModal(){
   if(!currentDriverPayLogKekeId)return;
   const k=LOCAL.getKekes().find(x=>x.id===currentDriverPayLogKekeId); if(!k)return;
-  const payments=LOCAL.getPayments().filter(p=>p.keke_id===currentDriverPayLogKekeId);
+  const payments=LOCAL.getPayments().filter(p=>p.keke_id===currentDriverPayLogKekeId)
+    .sort((a,b)=>new Date(b.payment_date)-new Date(a.payment_date));
   const bal=k.total_loan-k.paid;
   document.getElementById('driverPayLogTitle').textContent=`📜 Payment History — ${k.driver_name} (${k.plate})`;
   document.getElementById('driverPayLogSummary').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center;margin-bottom:18px">
@@ -1429,11 +1468,20 @@ async function renderAlerts(){
 //  PAYMENT LOG
 // ═══════════════════════════════════════════════════════════════
 async function renderPayments(){
+  // Force a fresh fetch if bootstrap hasn't completed or payments cache is
+  // missing entirely. Using CACHE.payments === null (the uninitialised sentinel)
+  // rather than length === 0 means a legitimately empty payment list won't keep
+  // triggering unnecessary refetches, while a failed/partial bootstrap still
+  // retries cleanly on every visit to the Payments view.
+  if (CACHE.payments === null) {
+    _bootstrapped = false;
+  }
   const q=(document.getElementById('paySearch').value||'').toLowerCase();
   const d=document.getElementById('payDate').value;
   let payments=await dbGetPayments();
   if(q) payments=payments.filter(p=>(p.driver_name||'').toLowerCase().includes(q)||(p.plate||'').toLowerCase().includes(q));
   if(d) payments=payments.filter(p=>p.payment_date===d);
+  payments.sort((a,b)=>new Date(b.payment_date)-new Date(a.payment_date));
   document.getElementById('payCount').textContent=payments.length+' records';
   const tbody=document.getElementById('paymentsTable');
   if(!payments.length){tbody.innerHTML='<tr><td colspan="8"><div class="empty-state"><p>No payments found</p></div></td></tr>';return;}
@@ -1670,7 +1718,7 @@ let currentDetailKekeId=null;
 async function openDetail(id){
   currentDetailKekeId=id;
   const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===id); if(!k)return;
-  const payments=await dbGetPayments(id);
+  const payments=(await dbGetPayments(id)).sort((a,b)=>new Date(b.payment_date)-new Date(a.payment_date));
   const complaints=LOCAL.getComplaints().filter(c=>c.keke_id===id);
   const p=pct(k.paid,k.total_loan),bal=k.total_loan-k.paid;
   const df=document.getElementById('dm_pdf_from'),dt=document.getElementById('dm_pdf_to');
