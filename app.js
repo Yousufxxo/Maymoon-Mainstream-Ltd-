@@ -13,29 +13,7 @@ const ROLE_MAP = {
 function isAdmin() { return currentUser && currentUser.role === 'admin'; }
 
 // ─── Total Outstanding show/hide (protected by a hardcoded password) ───
-const OUTSTANDING_PASSWORD = 'seefunds'; // change this to whatever password you want
-let outstandingVisible = false;
-let _lastTotalOutstanding = 0;
-function toggleOutstandingVisibility() {
-  const valEl = document.getElementById('stat-outstanding');
-  const icon = document.getElementById('outstandingEyeIcon');
-  if (!valEl || !icon) return;
-  if (outstandingVisible) {
-    outstandingVisible = false;
-    valEl.textContent = '••••••';
-    icon.innerHTML = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
-  } else {
-    const pass = window.prompt('Enter password to view Total Outstanding:');
-    if (pass === null) return; // cancelled
-    if (pass === OUTSTANDING_PASSWORD) {
-      outstandingVisible = true;
-      valEl.textContent = fmt(_lastTotalOutstanding);
-      icon.innerHTML = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>`;
-    } else {
-      toast('Incorrect password.', 'error');
-    }
-  }
-}
+
 
 // ─── Password show/hide toggle ────────────────────────────────
 function togglePasswordVisibility() {
@@ -2350,3 +2328,26 @@ window.addEventListener('load', async () => {
     }
   }
 });
+const OUTSTANDING_PASSWORD = 'seefunds'; // change this to whatever password you want
+let outstandingVisible = false;
+let _lastTotalOutstanding = 0;
+function toggleOutstandingVisibility() {
+  const valEl = document.getElementById('stat-outstanding');
+  const icon = document.getElementById('outstandingEyeIcon');
+  if (!valEl || !icon) return;
+  if (outstandingVisible) {
+    outstandingVisible = false;
+    valEl.textContent = '••••••';
+    icon.innerHTML = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+  } else {
+    const pass = window.prompt('Enter password to view Total Outstanding:');
+    if (pass === null) return; // cancelled
+    if (pass === OUTSTANDING_PASSWORD) {
+      outstandingVisible = true;
+      valEl.textContent = fmt(_lastTotalOutstanding);
+      icon.innerHTML = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+    } else {
+      toast('Incorrect password.', 'error');
+    }
+  }
+}
