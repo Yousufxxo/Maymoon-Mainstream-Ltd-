@@ -30,6 +30,9 @@
     .pw-toggle{position:absolute;right:10px;background:none;border:none;cursor:pointer;color:var(--gray-400);padding:4px;display:flex;align-items:center;justify-content:center;transition:color .2s}
     .pw-toggle:hover{color:var(--gray-700)}
     .pw-toggle svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .stat-eye-btn{background:none;border:none;cursor:pointer;color:var(--gray-400);padding:2px;display:flex;align-items:center;justify-content:center;transition:color .2s}
+    .stat-eye-btn:hover{color:var(--gray-700)}
+    .stat-eye-btn svg{width:17px;height:17px}
 
     /* APP */
     #app{display:none;min-height:100vh}
