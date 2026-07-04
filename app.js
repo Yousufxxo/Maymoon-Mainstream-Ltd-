@@ -1353,7 +1353,7 @@ async function renderDrivers() {
     </select>`:'';
     return `<div class="keke-card">
       <div class="keke-card-header${done?' completed':k.status==='on_repair'?' on-repair':k.status==='repossession'?' repo':''}">
-        <div class="keke-plate">🛺 ${k.plate}${k.pt_number?` <span style="font-size:.72rem;opacity:.7">PT:${k.pt_number}</span>`:''}</div>
+        <div class="keke-plate">🛺 ${k.pt_number?`PT: ${k.pt_number}`:'PT: —'}${k.plate?` <span style="font-size:.72rem;opacity:.7">${k.plate}</span>`:''}</div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${batchBadge(k.batch)} ${breakTag}</div>
       </div>
       <div class="keke-card-body">
@@ -1361,7 +1361,7 @@ async function renderDrivers() {
           ${statusBadge(k.status)}
           ${statusDropdown}
         </div>
-        <div class="keke-driver-row" style="margin-top:4px">${avatarHtml}<div><div class="keke-driver">${k.driver_name}</div><div class="keke-phone">📞 ${k.driver_phone}${k.driver_address?' · 📍 '+k.driver_address:''}</div>${k.shorty_name?`<div style="font-size:.73rem;color:#0369a1;margin-top:2px">🔗 ${k.shorty_name}</div>`:''}</div></div>
+        <div class="keke-driver-row" style="margin-top:4px">${avatarHtml}<div><div class="keke-driver">${k.driver_name}</div><div class="keke-phone">📞 ${k.driver_phone}${k.driver_address?' · 📍 '+k.driver_address:''}</div>${k.guarantor_name?`<div style="font-size:.73rem;color:#0369a1;margin-top:2px">🤝 ${k.guarantor_name}${k.guarantor_phone?' · '+k.guarantor_phone:''}</div>`:''}</div></div>
         <div class="keke-amounts">
           <div class="keke-amt"><div class="al">Loan</div><div class="av">${fmt(k.total_loan)}</div></div>
           <div class="keke-amt"><div class="al">Paid</div><div class="av green">${fmt(k.paid)}</div></div>
@@ -1392,13 +1392,14 @@ async function openDriverPayLog(kekeId){
   renderDriverPayLogModal();
 }
 function closeDriverPayLogModal(){document.getElementById('driverPayLogModal').classList.remove('active');currentDriverPayLogKekeId=null;}
+function addPaymentFromPayLog(){if(!currentDriverPayLogKekeId)return;const id=currentDriverPayLogKekeId;closeDriverPayLogModal();openPaymentModal(id);}
 function renderDriverPayLogModal(){
   if(!currentDriverPayLogKekeId)return;
   const k=LOCAL.getKekes().find(x=>x.id===currentDriverPayLogKekeId); if(!k)return;
   const payments=LOCAL.getPayments().filter(p=>p.keke_id===currentDriverPayLogKekeId)
     .sort((a,b)=>new Date(b.payment_date)-new Date(a.payment_date));
   const bal=k.total_loan-k.paid;
-  document.getElementById('driverPayLogTitle').textContent=`📜 Payment History — ${k.driver_name} (${k.plate})`;
+  document.getElementById('driverPayLogTitle').textContent=`📜 Payment History — ${k.driver_name} (PT: ${k.pt_number||'—'})`;
   document.getElementById('driverPayLogSummary').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center;margin-bottom:18px">
     <div style="background:var(--gray-50);border-radius:var(--radius-sm);padding:12px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Total Loan</div><div style="font-weight:800;color:var(--gray-800)">${fmt(k.total_loan)}</div></div>
     <div style="background:var(--green-bg);border-radius:var(--radius-sm);padding:12px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Total Paid</div><div style="font-weight:800;color:var(--green)">${fmt(k.paid)}</div></div>
@@ -1483,7 +1484,8 @@ async function renderPayments(){
   const q=(document.getElementById('paySearch').value||'').toLowerCase();
   const d=document.getElementById('payDate').value;
   let payments=await dbGetPayments();
-  if(q) payments=payments.filter(p=>(p.driver_name||'').toLowerCase().includes(q)||(p.plate||'').toLowerCase().includes(q));
+  const kekeMap={}; (await dbGetKekes()).forEach(k=>kekeMap[k.id]=k);
+  if(q) payments=payments.filter(p=>(p.driver_name||'').toLowerCase().includes(q)||(p.plate||'').toLowerCase().includes(q)||((kekeMap[p.keke_id]&&kekeMap[p.keke_id].pt_number)||'').toLowerCase().includes(q));
   if(d) payments=payments.filter(p=>p.payment_date===d);
   payments.sort((a,b)=>new Date(b.payment_date)-new Date(a.payment_date));
   document.getElementById('payCount').textContent=payments.length+' records';
@@ -1498,7 +1500,8 @@ async function renderPayments(){
     const isZero2=p.is_short&&Number(p.amount)===0;
     const rowClass2=isZero2?'pay-zero-row':p.is_short?'pay-short-row':hasOver?'pay-over-row':'';
     const cellClass2=isZero2?'pay-zero':p.is_short?'pay-short':hasOver?'pay-over':'';
-    return`<tr class="${rowClass2}"><td>${fmtDateStr(p.payment_date)}</td><td><strong>${p.driver_name}</strong></td><td><span class="badge badge-gray">${p.plate}</span></td><td>${batchBadge(p.batch)}</td><td class="${cellClass2}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
+    const ptNo=(kekeMap[p.keke_id]&&kekeMap[p.keke_id].pt_number)||p.pt_number||'—';
+    return`<tr class="${rowClass2}"><td>${fmtDateStr(p.payment_date)}</td><td><strong style="cursor:pointer;color:var(--red)" onclick="openDriverPayLog('${p.keke_id}')" title="Click to open ${p.driver_name}'s card">${p.driver_name}</strong></td><td><span class="badge badge-gray">${ptNo}</span></td><td>${batchBadge(p.batch)}</td><td class="${cellClass2}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
   }).join('');
 }
 async function deletePaymentById(payId){if(!isAdmin()){toast('Admin access required','error');return;}if(!confirm('Delete this payment?'))return;editingPaymentId=payId;await deletePayment();}
@@ -1844,8 +1847,8 @@ async function buildDriverPaymentStatementPDF(kekeId, from, to){
   const dateStr=fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const rangeNote=(from||to)?`${from||'start'} → ${to||'today'}`:'All Time';
   const rows=payments.length?payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td class="${p.is_short&&Number(p.amount)===0?'am-zero':p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;padding:20px;color:#adb5bd">No payments in selected date range</td></tr>';
-  const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Driver Payment Statement</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Period: ${rangeNote} · Generated: ${dateStr}</div></div><div class="hdr-r">Plate: <strong>${k.plate}</strong>${k.pt_number?'<br>PT: '+k.pt_number:''}<br>Batch ${k.batch||'—'}</div></div><div class="info-grid"><div><strong>Driver:</strong> ${k.driver_name}</div><div><strong>Phone:</strong> ${k.driver_phone}${k.driver_alt_phone?' / '+k.driver_alt_phone:''}</div><div><strong>Shorty:</strong> ${k.shorty_name||'—'}</div><div><strong>Shorty Phone:</strong> ${k.shorty_phone||'—'}</div><div><strong>Address:</strong> ${k.driver_address||'—'}</div><div><strong>Schedule:</strong> ${schedLabel(k.schedule)} — ${fmt(k.installment_amount)}</div></div><div class="stats"><div class="stat"><div class="lbl">Total Loan</div><div class="val">${fmt(k.total_loan)}</div></div><div class="stat"><div class="lbl">Paid (all time)</div><div class="val g">${fmt(k.paid)}</div></div><div class="stat"><div class="lbl">Balance</div><div class="val ${bal<=0?'g':'r'}">${bal<=0?'CLEARED':fmt(bal)}</div></div></div>${(from||to)?`<div class="filter-note">📅 ${rangeNote} — ${payments.length} record(s), ${fmt(periodTotal)}</div>`:''}<table><thead><tr><th>Date</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
-  openPDF(html,`Statement — ${k.driver_name} (${k.plate})`);
+  const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Driver Payment Statement</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Period: ${rangeNote} · Generated: ${dateStr}</div></div><div class="hdr-r">PT: <strong>${k.pt_number||'—'}</strong><br>Batch ${k.batch||'—'}</div></div><div class="info-grid"><div><strong>Driver:</strong> ${k.driver_name}</div><div><strong>Phone:</strong> ${k.driver_phone}${k.driver_alt_phone?' / '+k.driver_alt_phone:''}</div><div><strong>Guarantor:</strong> ${k.guarantor_name||'—'}</div><div><strong>Guarantor Phone:</strong> ${k.guarantor_phone||'—'}</div><div><strong>Address:</strong> ${k.driver_address||'—'}</div><div><strong>Schedule:</strong> ${schedLabel(k.schedule)} — ${fmt(k.installment_amount)}</div></div><div class="stats"><div class="stat"><div class="lbl">Total Loan</div><div class="val">${fmt(k.total_loan)}</div></div><div class="stat"><div class="lbl">Paid (all time)</div><div class="val g">${fmt(k.paid)}</div></div><div class="stat"><div class="lbl">Balance</div><div class="val ${bal<=0?'g':'r'}">${bal<=0?'CLEARED':fmt(bal)}</div></div></div>${(from||to)?`<div class="filter-note">📅 ${rangeNote} — ${payments.length} record(s), ${fmt(periodTotal)}</div>`:''}<table><thead><tr><th>Date</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
+  openPDF(html,`Statement — ${k.driver_name} (PT: ${k.pt_number||'—'})`);
 }
 async function downloadDriverPDF(){
   if(!currentDetailKekeId){toast('No driver selected.','error');return;}
@@ -1999,7 +2002,7 @@ async function renderMaintenance() {
     const records=LOCAL.getServiceRecords().filter(r=>r.keke_id===k.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
     return `<div class="maint-card ${overdue?'maint-overdue':''}">
       <div class="maint-header">
-        <div><div class="maint-plate">🛺 ${k.plate}</div><div class="maint-driver">${k.driver_name} ${batchBadge(k.batch)}</div></div>
+        <div><div class="maint-plate">🛺 PT: ${k.pt_number||'—'}</div><div class="maint-driver">${k.driver_name} ${batchBadge(k.batch)}</div></div>
         ${overdue?'<span class="badge badge-red">🔧 Service Overdue</span>':'<span class="badge badge-green">✅ Up to Date</span>'}
       </div>
       <div class="maint-status-row">
@@ -2021,8 +2024,8 @@ let currentServiceKekeId = null;
 function openServiceModal(kekeId) {
   currentServiceKekeId = kekeId;
   const k = LOCAL.getKekes().find(x=>x.id===kekeId); if(!k) return;
-  document.getElementById('serviceModalTitle').textContent = `🔧 Service Log — ${k.driver_name} (${k.plate})`;
-  document.getElementById('serviceKekeInfo').innerHTML = `<svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><p>Plate: <strong>${k.plate}</strong> · Driver: <strong>${k.driver_name}</strong> · ${batchBadge(k.batch)} · Service expected every <strong>3 weeks</strong>.</p>`;
+  document.getElementById('serviceModalTitle').textContent = `🔧 Service Log — ${k.driver_name} (PT: ${k.pt_number||'—'})`;
+  document.getElementById('serviceKekeInfo').innerHTML = `<svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><p>PT: <strong>${k.pt_number||'—'}</strong> · Driver: <strong>${k.driver_name}</strong> · ${batchBadge(k.batch)} · Service expected every <strong>3 weeks</strong>.</p>`;
   document.getElementById('svc_date').value=getTodayStr();
   document.getElementById('svc_condition').value = 'good';
   document.getElementById('svc_done').value = 'yes';
@@ -2092,8 +2095,8 @@ function downloadServiceHistoryPDF() {
   const rows = records.length
     ? records.map(r=>`<tr><td>${fmtDateStr(r.date)}</td><td class="${r.serviced==='yes'?'am':'am-short'}">${r.serviced==='yes'?'✅ Serviced':'❌ Not Serviced'}</td><td>${condLabel[r.condition]||r.condition}</td><td>${r.mechanic||'—'}</td><td>${r.notes||'—'}</td><td style="font-size:.75em;color:#adb5bd">${r.recorded_by||'?'}</td></tr>`).join('')
     : '<tr><td colspan="6" style="text-align:center;padding:20px;color:#adb5bd">No service records yet</td></tr>';
-  const html = `<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Service &amp; Maintenance History</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Vehicle: ${k.plate} &nbsp;·&nbsp; Driver: ${k.driver_name} &nbsp;·&nbsp; Batch ${k.batch||'—'}</div></div><div class="hdr-r">${records.length} record(s)<br><span style="font-size:.75rem;color:#6c757d">Every 3 weeks</span></div></div><div class="stats"><div class="stat"><div class="lbl">Total Records</div><div class="val">${records.length}</div></div><div class="stat"><div class="lbl">Serviced</div><div class="val g">${records.filter(r=>r.serviced==='yes').length}</div></div><div class="stat"><div class="lbl">Not Serviced</div><div class="val r">${records.filter(r=>r.serviced==='no').length}</div></div></div><table><thead><tr><th>Date</th><th>Status</th><th>Condition</th><th>Mechanic</th><th>Notes</th><th>Recorded By</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd · Service Records for ${k.plate}</span><span>${dateStr}</span></div>`;
-  openPDF(html, `Service History — ${k.plate} (${k.driver_name})`);
+  const html = `<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Service &amp; Maintenance History</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">PT: ${k.pt_number||'—'} &nbsp;·&nbsp; Driver: ${k.driver_name} &nbsp;·&nbsp; Batch ${k.batch||'—'}</div></div><div class="hdr-r">${records.length} record(s)<br><span style="font-size:.75rem;color:#6c757d">Every 3 weeks</span></div></div><div class="stats"><div class="stat"><div class="lbl">Total Records</div><div class="val">${records.length}</div></div><div class="stat"><div class="lbl">Serviced</div><div class="val g">${records.filter(r=>r.serviced==='yes').length}</div></div><div class="stat"><div class="lbl">Not Serviced</div><div class="val r">${records.filter(r=>r.serviced==='no').length}</div></div></div><table><thead><tr><th>Date</th><th>Status</th><th>Condition</th><th>Mechanic</th><th>Notes</th><th>Recorded By</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd · Service Records for PT ${k.pt_number||'—'}</span><span>${dateStr}</span></div>`;
+  openPDF(html, `Service History — PT ${k.pt_number||'—'} (${k.driver_name})`);
 }
 
 // ═══════════════════════════════════════════════════════════════
