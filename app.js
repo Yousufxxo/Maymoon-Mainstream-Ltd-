@@ -1361,7 +1361,7 @@ async function renderDrivers() {
           ${statusBadge(k.status)}
           ${statusDropdown}
         </div>
-        <div class="keke-driver-row" style="margin-top:4px">${avatarHtml}<div><div class="keke-driver">${k.driver_name}</div><div class="keke-phone">📞 ${k.driver_phone}${k.driver_address?' · 📍 '+k.driver_address:''}</div>${k.guarantor_name?`<div style="font-size:.73rem;color:#0369a1;margin-top:2px">🤝 ${k.guarantor_name}${k.guarantor_phone?' · '+k.guarantor_phone:''}</div>`:''}</div></div>
+        <div class="keke-driver-row" style="margin-top:4px">${avatarHtml}<div><div class="keke-driver">${k.driver_name}</div><div class="keke-phone">📞 ${k.driver_phone}${k.driver_address?' · 📍 '+k.driver_address:''}</div>${k.guarantor_name?`<div style="font-size:.73rem;color:#0369a1;margin-top:2px">G- ${k.guarantor_name}${k.guarantor_phone?' · '+k.guarantor_phone:''}</div>`:''}</div></div>
         <div class="keke-amounts">
           <div class="keke-amt"><div class="al">Loan</div><div class="av">${fmt(k.total_loan)}</div></div>
           <div class="keke-amt"><div class="al">Paid</div><div class="av green">${fmt(k.paid)}</div></div>
