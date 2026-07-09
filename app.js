@@ -1465,7 +1465,7 @@ async function renderAlerts(){
     const lastPay=kp.length?kp.reduce((a,b)=>new Date(a.payment_date)>new Date(b.payment_date)?a:b):null;
     const daysAgo=lastPay?Math.floor((Date.now()-new Date(lastPay.payment_date).getTime())/86400000):'Never paid';
     const bal=k.total_loan-k.paid;
-    return`<div class="overdue-item"><div class="oi-info"><div class="oi-name" onclick="openDetail('${k.id}')" style="cursor:pointer" title="View driver card">🛺 ${k.driver_name} &nbsp;<span class="badge badge-gray">${k.plate}</span> ${batchBadge(k.batch)}</div><div class="oi-detail">Balance: <strong style="color:var(--red)">${fmt(bal)}</strong> · Last payment: <strong>${typeof daysAgo==='number'?daysAgo+' days ago':daysAgo}</strong> · 📞 ${k.driver_phone}</div></div><div class="oi-actions"><button class="btn btn-call btn-sm" onclick="callDriver('${k.driver_phone}')">Call</button><button class="btn btn-sms btn-sm" onclick="smsDriver('${k.driver_phone}','${k.driver_name}','${k.plate}',${bal})">SMS</button><button class="btn btn-primary btn-sm" onclick="openPaymentModal('${k.id}')">Pay</button></div></div>`;
+    return`<div class="overdue-item"><div class="oi-info"><div class="oi-name" onclick="openDetail('${k.id}')" style="cursor:pointer" title="View driver card">🛺 ${k.driver_name} &nbsp;<span class="badge badge-gray">${k.pt_number||k.plate}</span> ${batchBadge(k.batch)}</div><div class="oi-detail">Balance: <strong style="color:var(--red)">${fmt(bal)}</strong> · Last payment: <strong>${typeof daysAgo==='number'?daysAgo+' days ago':daysAgo}</strong> · 📞 ${k.driver_phone}</div></div><div class="oi-actions"><button class="btn btn-call btn-sm" onclick="callDriver('${k.driver_phone}')">Call</button><button class="btn btn-sms btn-sm" onclick="smsDriver('${k.driver_phone}','${k.driver_name}','${k.plate}',${bal})">SMS</button><button class="btn btn-primary btn-sm" onclick="openPaymentModal('${k.id}')">Pay</button></div></div>`;
   }).join('')+'</div>';
 }
 
@@ -1923,7 +1923,7 @@ function renderBatchPaymentAlerts() {
           ${unpaid.map(k=>`<div class="bpa-driver${isPast4pm?' bpa-overdue':''}">
             <div style="display:flex;align-items:center;gap:8px;flex:1">
               ${k.driver_photo_url?`<img src="${k.driver_photo_url}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0">`:'<div style="width:28px;height:28px;border-radius:50%;background:var(--gray-200);display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">👤</div>'}
-              <div><div style="font-weight:700;font-size:.86rem">${k.driver_name}</div><div style="font-size:.74rem;color:${isPast4pm?'var(--red)':'var(--gray-500)'}">${k.plate} &bull; 📞 ${k.driver_phone}</div></div>
+              <div><div style="font-weight:700;font-size:.86rem">${k.driver_name}</div><div style="font-size:.74rem;color:${isPast4pm?'var(--red)':'var(--gray-500)'}">${k.pt_number||k.plate} &bull; 📞 ${k.driver_phone}</div></div>
             </div>
             <button class="btn btn-primary btn-sm" style="flex-shrink:0" onclick="openPaymentModal('${k.id}')">💳 Pay</button>
           </div>`).join('')}
@@ -1931,7 +1931,7 @@ function renderBatchPaymentAlerts() {
       </div>`:''}
       ${paid.length?`<div style="margin-top:10px"><div style="font-size:.74rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">✅ Paid Today (${paid.length}):</div>
         <div style="display:flex;flex-direction:column;gap:5px">
-          ${paid.map(k=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--green-bg);border-radius:var(--radius-sm);font-size:.83rem"><span style="color:var(--green)">✓</span> ${k.driver_name} &bull; ${k.plate}</div>`).join('')}
+          ${paid.map(k=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--green-bg);border-radius:var(--radius-sm);font-size:.83rem"><span style="color:var(--green)">✓</span> ${k.driver_name} &bull; ${k.pt_number||k.plate}</div>`).join('')}
         </div>
       </div>`:''}
     </div>`;
