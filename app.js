@@ -693,6 +693,13 @@ function parseFmt(el) {
 function uid() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16)}); }
 function pct(paid,total) { return total>0 ? Math.min(100,Math.round((paid/total)*100)) : 0; }
 function toast(msg,type='success') { const t=document.createElement('div'); t.className='toast '+type; t.innerHTML=type==='success'?`<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>${msg}`:`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>${msg}`; document.getElementById('toastContainer').appendChild(t); setTimeout(()=>t.remove(),3500); }
+
+// ═══════════════════════════════════════════════════════════════
+//  DB LIMIT NOTICE — blocks Add Payment / Register Keke actions
+// ═══════════════════════════════════════════════════════════════
+function showDbLimitNotice(){
+  toast('Database free tier is full and cannot be saved. Please update your account.','error');
+}
 function schedLabel(s) { return {daily:'Daily','3days':'Every 3 Days','5days':'Every 5 Days',weekly:'Weekly'}[s]||s; }
 // ─── Safe date display helpers ────────────────────────────────
 // new Date('YYYY-MM-DD') is parsed as UTC midnight, which shifts one day
@@ -1273,6 +1280,7 @@ function validateRequiredFields(fieldIds) {
 }
 
 async function saveKeke() {
+  showDbLimitNotice(); return;
   const plate=document.getElementById('k_plate').value.trim().toUpperCase();
   const driver=document.getElementById('k_driver').value.trim();
   const phone=document.getElementById('k_phone').value.trim();
@@ -1516,6 +1524,7 @@ async function renderCompleted(){const kekes=(await dbGetKekes()).filter(k=>k.st
 // ═══════════════════════════════════════════════════════════════
 let currentKekeId=null, _currentInstallment=0, _savingPayment=false;
 async function openPaymentModal(id){
+  showDbLimitNotice(); return;
   currentKekeId=id;
   _savingPayment=false; // always reset on open
   const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===id); if(!k)return;
