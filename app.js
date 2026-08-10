@@ -698,7 +698,7 @@ function toast(msg,type='success') { const t=document.createElement('div'); t.cl
 //  DB LIMIT NOTICE — blocks Add Payment / Register Keke actions
 // ═══════════════════════════════════════════════════════════════
 function showDbLimitNotice(){
-  toast('Database free tier is full and cannot be saved. Please update your account.','error');
+ toast('ERR_PLAN_LIMIT_REACHED — Action blocked: error [423] Feature locked');
 }
 function schedLabel(s) { return {daily:'Daily','3days':'Every 3 Days','5days':'Every 5 Days',weekly:'Weekly'}[s]||s; }
 // ─── Safe date display helpers ────────────────────────────────
