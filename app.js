@@ -1000,8 +1000,10 @@ async function refreshDashboard() {
     if(daysSinceLast>=days) expectedToday+=k.installment_amount;
   });
 
-  document.getElementById('stat-total-keke').textContent=kekes.length;
-  document.getElementById('stat-active').textContent=active.length;
+  _lastTotalKeke=kekes.length;
+  _lastActiveLoans=active.length;
+  document.getElementById('stat-total-keke').textContent=totalKekeVisible?String(kekes.length):'••••••';
+  document.getElementById('stat-active').textContent=activeLoansVisible?String(active.length):'••••••';
   document.getElementById('stat-collected').textContent=fmt(todayCol);
   document.getElementById('stat-collected-sub').textContent='All time: '+fmt(allCol);
   document.getElementById('stat-completed').textContent=completed.length;
@@ -2348,6 +2350,54 @@ function toggleOutstandingVisibility() {
     if (pass === OUTSTANDING_PASSWORD) {
       outstandingVisible = true;
       valEl.textContent = fmt(_lastTotalOutstanding);
+      icon.innerHTML = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+    } else {
+      toast('Incorrect password.', 'error');
+    }
+  }
+}
+
+// ─── Total Kekes show/hide (protected by a hardcoded password) ───
+let totalKekeVisible = false;
+let _lastTotalKeke = 0;
+function toggleTotalKekeVisibility() {
+  const valEl = document.getElementById('stat-total-keke');
+  const icon = document.getElementById('totalKekeEyeIcon');
+  if (!valEl || !icon) return;
+  if (totalKekeVisible) {
+    totalKekeVisible = false;
+    valEl.textContent = '••••••';
+    icon.innerHTML = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+  } else {
+    const pass = window.prompt('Enter password to view Total Kekes:');
+    if (pass === null) return; // cancelled
+    if (pass === OUTSTANDING_PASSWORD) {
+      totalKekeVisible = true;
+      valEl.textContent = String(_lastTotalKeke);
+      icon.innerHTML = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+    } else {
+      toast('Incorrect password.', 'error');
+    }
+  }
+}
+
+// ─── Active Loans show/hide (protected by a hardcoded password) ───
+let activeLoansVisible = false;
+let _lastActiveLoans = 0;
+function toggleActiveLoansVisibility() {
+  const valEl = document.getElementById('stat-active');
+  const icon = document.getElementById('activeLoansEyeIcon');
+  if (!valEl || !icon) return;
+  if (activeLoansVisible) {
+    activeLoansVisible = false;
+    valEl.textContent = '••••••';
+    icon.innerHTML = `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+  } else {
+    const pass = window.prompt('Enter password to view Active Loans:');
+    if (pass === null) return; // cancelled
+    if (pass === OUTSTANDING_PASSWORD) {
+      activeLoansVisible = true;
+      valEl.textContent = String(_lastActiveLoans);
       icon.innerHTML = `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/>`;
     } else {
       toast('Incorrect password.', 'error');
