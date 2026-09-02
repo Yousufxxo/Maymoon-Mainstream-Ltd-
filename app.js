@@ -1564,6 +1564,31 @@ function checkShortPayment(input){
 }
 function closePaymentModal(){document.getElementById('paymentModal').classList.remove('active');if(currentKekeId)clearDraft('payment_'+currentKekeId);currentKekeId=null;_savingPayment=false;}
 
+// Is a given main view currently visible on screen?
+function isViewActive(v){ const el=document.getElementById('view-'+v); return !!el && el.style.display!=='none'; }
+// Refresh whichever views are currently on-screen so payment changes show up
+// immediately, without the staff needing to reload the page.
+function refreshVisibleViews(){
+  if(isViewActive('alerts'))    renderAlerts();
+  if(isViewActive('drivers'))   renderDrivers();
+  if(isViewActive('payments'))  renderPayments();
+  if(isViewActive('dashboard')) refreshDashboard();
+}
+// Duplicate-payment guard shared by single and batch payment flows.
+// Blocks a new payment for the same keke/date/amount/description combo —
+// UNLESS the amount or description differs from the existing record.
+// No time window: this checks against ALL of that driver's payments on that
+// date, not just ones recorded seconds ago, so a genuine accidental re-click
+// (even minutes later) is still caught.
+function findDuplicatePayment(kekeId,date,amount,note){
+  const normNote=(note||'').trim().toLowerCase();
+  return (CACHE.payments||[]).find(p=>
+    p.keke_id===kekeId &&
+    p.payment_date===date &&
+    Number(p.amount)===Number(amount) &&
+    ((p.note||'').trim().toLowerCase())===normNote
+  );
+}
 async function savePayment(){
   if(_savingPayment)return; // prevent double-click
   _savingPayment=true;
@@ -1575,10 +1600,13 @@ async function savePayment(){
   const btn=document.getElementById('savePayBtn'); btn.innerHTML='<div class="spinner"></div> Saving...'; btn.disabled=true;
   try{
     const kekes=await dbGetKekes(); const k=kekes.find(x=>x.id===currentKekeId); if(!k)throw new Error('Keke not found');
-    // Duplicate guard: block if identical payment already recorded in last 10 seconds
-    const recent=(CACHE.payments||[]).filter(p=>p.keke_id===k.id&&p.payment_date===date&&Number(p.amount)===amount);
-    const lastRecorded=recent.length?Math.max(...recent.map(p=>new Date(p.recorded_at||0).getTime())):0;
-    if(recent.length&&(Date.now()-lastRecorded)<10000){toast('⚠️ Duplicate detected — this payment was just recorded.','error');_savingPayment=false;btn.innerHTML='<svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Record Payment';btn.disabled=false;return;}
+    // Duplicate guard: block if an identical payment (same date, amount AND
+    // description) already exists for this driver. Change the amount or the
+    // description to record a genuinely separate payment.
+    if(findDuplicatePayment(k.id,date,amount,note)){
+      toast('⚠️ Duplicate blocked — an identical payment (same date, amount & description) already exists for this driver. Change the amount or description to record a new one.','error');
+      _savingPayment=false;btn.innerHTML='<svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Record Payment';btn.disabled=false;return;
+    }
     const isShort=amount<=0||amount<k.installment_amount;
     const actual=Math.min(amount,k.total_loan-k.paid),newPaid=k.paid+actual,newBal=k.total_loan-newPaid,isComplete=newBal<=0;
     const overpayAmount=Math.max(0,actual-k.installment_amount);
@@ -1586,10 +1614,88 @@ async function savePayment(){
     await dbSavePayment({id:uid(),keke_id:k.id,plate:k.plate,driver_name:k.driver_name,batch:k.batch,amount:actual,balance_after:Math.max(0,newBal),payment_date:date,note,is_short:isShort,expected_amount:k.installment_amount,overpay_amount:overpayAmount,recorded_at:new Date().toISOString()});
     logActivity(`Payment: ${k.plate}`,'payment',`Driver: ${k.driver_name} | ${fmt(actual)}${isShort?' [SHORT]':overpayAmount>0?' [OVER +'+fmt(overpayAmount)+']':''} | Bal: ${fmt(Math.max(0,newBal))} | By: ${currentUser?.name||'?'}`);
     closePaymentModal();
+    refreshVisibleViews();
     if(isComplete){toast(`🎉 FULLY PAID! Keke ${k.plate} belongs to ${k.driver_name}!`);setTimeout(()=>showView('completed'),700);}
-    else{toast(`Payment of ${fmt(actual)} recorded.${isShort?' ⚠️ Short payment.':overpayAmount>0?' 💚 Includes '+fmt(overpayAmount)+' extra.':''}`);renderDrivers();}
+    else{toast(`Payment of ${fmt(actual)} recorded.${isShort?' ⚠️ Short payment.':overpayAmount>0?' 💚 Includes '+fmt(overpayAmount)+' extra.':''}`);}
   }catch(e){toast('Error: '+e.message,'error');_savingPayment=false;}
   finally{btn.innerHTML='<svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Record Payment';btn.disabled=false;}
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  BULK BATCH PAYMENT (Alerts view)
+// ═══════════════════════════════════════════════════════════════
+let _savingBatchPay=false;
+function openBatchPayModal(){
+  _savingBatchPay=false;
+  document.getElementById('bp_batch').value='';
+  const syncToday=getTodayStr();
+  document.getElementById('bp_date').value=syncToday;
+  document.getElementById('bp_note').value='';
+  document.getElementById('batchPayModal').classList.add('active');
+  fetchTodayStr().then(d=>{
+    const el=document.getElementById('bp_date');
+    if(el && el.closest('.modal-overlay.active') && el.value===syncToday) el.value=d;
+  });
+}
+function closeBatchPayModal(){document.getElementById('batchPayModal').classList.remove('active');_savingBatchPay=false;}
+async function submitBatchPay(){
+  if(_savingBatchPay)return; // prevent double-click
+  const batch=document.getElementById('bp_batch').value;
+  const date=document.getElementById('bp_date').value;
+  const note=document.getElementById('bp_note').value.trim();
+  if(!batch){toast('Select a batch.','error');return;}
+  if(!date){toast('Select a payment date.','error');return;}
+
+  const kekes=await dbGetKekes();
+  const onBreak=isOnBreak(batch);
+  const batchKekes=kekes.filter(k=>k.batch===batch);
+  const eligible=batchKekes.filter(k=>k.status==='active'&&!onBreak&&Number(k.installment_amount)>0);
+  const skippedStatus=batchKekes.filter(k=>k.status!=='active').length;
+  const skippedNoAmount=batchKekes.filter(k=>k.status==='active'&&!(Number(k.installment_amount)>0)).length;
+
+  if(onBreak){toast(`Batch ${batch} is currently on Holiday/Break — no payments can be applied.`,'error');return;}
+  if(!eligible.length){toast(`No eligible active drivers found in Batch ${batch}.`,'error');return;}
+
+  const summaryBits=[`${eligible.length} driver(s) will receive a payment`];
+  if(skippedStatus) summaryBits.push(`${skippedStatus} skipped (not active)`);
+  if(skippedNoAmount) summaryBits.push(`${skippedNoAmount} skipped (no installment amount set)`);
+  if(!confirm(`Apply bulk payment to Batch ${batch}?\n\nDate: ${date}\nDescription: ${note||'(none)'}\n${summaryBits.join(' · ')}\n\nEach driver is charged their own installment amount. This cannot be bulk-undone — continue?`)) return;
+
+  _savingBatchPay=true;
+  const btn=document.getElementById('batchPayBtn'); btn.innerHTML='<div class="spinner"></div> Processing...'; btn.disabled=true;
+
+  let recorded=0, skippedDuplicate=0, completedCount=0, totalCollected=0, failed=0;
+  try{
+    // Sequential so each driver's cache update and duplicate check sees the
+    // effect of the ones processed just before it.
+    for(const k of eligible){
+      try{
+        const amount=Number(k.installment_amount);
+        if(findDuplicatePayment(k.id,date,amount,note)){ skippedDuplicate++; continue; }
+        const isShort=amount<=0||amount<k.installment_amount;
+        const actual=Math.min(amount,k.total_loan-k.paid);
+        const newPaid=k.paid+actual, newBal=k.total_loan-newPaid, isComplete=newBal<=0;
+        const overpayAmount=Math.max(0,actual-k.installment_amount);
+        await dbUpdateKeke(k.id,{paid:newPaid,status:isComplete?'completed':'active',completed_at:isComplete?new Date().toISOString():null});
+        await dbSavePayment({id:uid(),keke_id:k.id,plate:k.plate,driver_name:k.driver_name,batch:k.batch,amount:actual,balance_after:Math.max(0,newBal),payment_date:date,note,is_short:isShort,expected_amount:k.installment_amount,overpay_amount:overpayAmount,recorded_at:new Date().toISOString()});
+        recorded++; totalCollected+=actual; if(isComplete) completedCount++;
+      }catch(innerErr){ failed++; console.error('Batch pay failed for',k.driver_name,innerErr); }
+    }
+    logActivity(`Bulk batch payment: Batch ${batch}`,'payment',`Date: ${date} | Recorded: ${recorded} | Duplicates skipped: ${skippedDuplicate} | Failed: ${failed} | Total: ${fmt(totalCollected)} | Note: ${note||'—'} | By: ${currentUser?.name||'?'}`);
+    closeBatchPayModal();
+    refreshVisibleViews();
+    let msg=`✅ Batch ${batch}: ${recorded} payment(s) recorded (${fmt(totalCollected)}).`;
+    if(completedCount) msg+=` 🎉 ${completedCount} loan(s) fully paid off!`;
+    if(skippedDuplicate) msg+=` ${skippedDuplicate} skipped as duplicate.`;
+    if(failed) msg+=` ⚠️ ${failed} failed — check Activity Log.`;
+    toast(msg, failed?'error':'success');
+  }catch(e){
+    toast('Error applying batch payment: '+e.message,'error');
+  }finally{
+    _savingBatchPay=false;
+    btn.innerHTML='<svg style="width:13px;height:13px;fill:none;stroke:white;stroke-width:2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg> Apply to Batch';
+    btn.disabled=false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
