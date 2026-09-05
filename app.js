@@ -1451,6 +1451,7 @@ async function renderAlerts(){
   const kekes=await dbGetKekes(),payments=await dbGetPayments();
   const overdue=getOverdueDrivers(kekes,payments);
   document.getElementById('alertCount').textContent=overdue.length+' drivers';
+  const bulkBtn=document.getElementById('bulkPayBtn'); if(bulkBtn) bulkBtn.style.display=isAdmin()?'':'none';
   const container=document.getElementById('alertsList');
 
   // Batch payment day alerts (at top)
@@ -1626,6 +1627,7 @@ async function savePayment(){
 // ═══════════════════════════════════════════════════════════════
 let _savingBatchPay=false;
 function openBatchPayModal(){
+  if(!isAdmin()){toast('Admin access required — bulk payments must be applied by an admin.','error');return;}
   _savingBatchPay=false;
   document.getElementById('bp_batch').value='';
   const syncToday=getTodayStr();
@@ -1639,6 +1641,7 @@ function openBatchPayModal(){
 }
 function closeBatchPayModal(){document.getElementById('batchPayModal').classList.remove('active');_savingBatchPay=false;}
 async function submitBatchPay(){
+  if(!isAdmin()){toast('Admin access required — bulk payments must be applied by an admin.','error');return;}
   if(_savingBatchPay)return; // prevent double-click
   const batch=document.getElementById('bp_batch').value;
   const date=document.getElementById('bp_date').value;
@@ -1652,26 +1655,37 @@ async function submitBatchPay(){
   const eligible=batchKekes.filter(k=>k.status==='active'&&!onBreak&&Number(k.installment_amount)>0);
   const skippedStatus=batchKekes.filter(k=>k.status!=='active').length;
   const skippedNoAmount=batchKekes.filter(k=>k.status==='active'&&!(Number(k.installment_amount)>0)).length;
+  // A driver already has any payment recorded on the chosen date — skip them
+  // regardless of that earlier payment's amount or description, so a bulk
+  // run never double-charges someone who was already paid individually (or
+  // in an earlier bulk run) for the same day.
+  const alreadyPaidToday=eligible.filter(k=>(CACHE.payments||[]).some(p=>p.keke_id===k.id&&p.payment_date===date)).length;
 
   if(onBreak){toast(`Batch ${batch} is currently on Holiday/Break — no payments can be applied.`,'error');return;}
   if(!eligible.length){toast(`No eligible active drivers found in Batch ${batch}.`,'error');return;}
 
-  const summaryBits=[`${eligible.length} driver(s) will receive a payment`];
+  const summaryBits=[`${eligible.length-alreadyPaidToday} driver(s) will receive a payment`];
+  if(alreadyPaidToday) summaryBits.push(`${alreadyPaidToday} skipped (already have a payment on ${date})`);
   if(skippedStatus) summaryBits.push(`${skippedStatus} skipped (not active)`);
   if(skippedNoAmount) summaryBits.push(`${skippedNoAmount} skipped (no installment amount set)`);
+  if(eligible.length-alreadyPaidToday<=0){toast(`Every eligible driver in Batch ${batch} already has a payment recorded for ${date}. Nothing to do.`,'error');return;}
   if(!confirm(`Apply bulk payment to Batch ${batch}?\n\nDate: ${date}\nDescription: ${note||'(none)'}\n${summaryBits.join(' · ')}\n\nEach driver is charged their own installment amount. This cannot be bulk-undone — continue?`)) return;
 
   _savingBatchPay=true;
   const btn=document.getElementById('batchPayBtn'); btn.innerHTML='<div class="spinner"></div> Processing...'; btn.disabled=true;
 
-  let recorded=0, skippedDuplicate=0, completedCount=0, totalCollected=0, failed=0;
+  let recorded=0, skippedAlreadyPaid=0, completedCount=0, totalCollected=0, failed=0;
   try{
-    // Sequential so each driver's cache update and duplicate check sees the
-    // effect of the ones processed just before it.
+    // Sequential so each driver's cache update and already-paid check sees
+    // the effect of the ones processed just before it.
     for(const k of eligible){
       try{
+        // Re-check at the moment of processing (not just the pre-count above)
+        // in case an earlier iteration in this very run just paid them, or
+        // someone recorded an individual payment for them a moment ago.
+        const alreadyHasPayment=(CACHE.payments||[]).some(p=>p.keke_id===k.id&&p.payment_date===date);
+        if(alreadyHasPayment){ skippedAlreadyPaid++; continue; }
         const amount=Number(k.installment_amount);
-        if(findDuplicatePayment(k.id,date,amount,note)){ skippedDuplicate++; continue; }
         const isShort=amount<=0||amount<k.installment_amount;
         const actual=Math.min(amount,k.total_loan-k.paid);
         const newPaid=k.paid+actual, newBal=k.total_loan-newPaid, isComplete=newBal<=0;
@@ -1681,12 +1695,12 @@ async function submitBatchPay(){
         recorded++; totalCollected+=actual; if(isComplete) completedCount++;
       }catch(innerErr){ failed++; console.error('Batch pay failed for',k.driver_name,innerErr); }
     }
-    logActivity(`Bulk batch payment: Batch ${batch}`,'payment',`Date: ${date} | Recorded: ${recorded} | Duplicates skipped: ${skippedDuplicate} | Failed: ${failed} | Total: ${fmt(totalCollected)} | Note: ${note||'—'} | By: ${currentUser?.name||'?'}`);
+    logActivity(`Bulk batch payment: Batch ${batch}`,'payment',`Date: ${date} | Recorded: ${recorded} | Already paid (skipped): ${skippedAlreadyPaid} | Failed: ${failed} | Total: ${fmt(totalCollected)} | Note: ${note||'—'} | By: ${currentUser?.name||'?'}`);
     closeBatchPayModal();
     refreshVisibleViews();
     let msg=`✅ Batch ${batch}: ${recorded} payment(s) recorded (${fmt(totalCollected)}).`;
     if(completedCount) msg+=` 🎉 ${completedCount} loan(s) fully paid off!`;
-    if(skippedDuplicate) msg+=` ${skippedDuplicate} skipped as duplicate.`;
+    if(skippedAlreadyPaid) msg+=` ${skippedAlreadyPaid} already had a payment for that date — skipped.`;
     if(failed) msg+=` ⚠️ ${failed} failed — check Activity Log.`;
     toast(msg, failed?'error':'success');
   }catch(e){

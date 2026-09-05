@@ -235,7 +235,7 @@
         </div>
       </div>
       <div class="info-box" style="border-color:rgba(208,2,27,.2);background:var(--red-bg)"><svg style="stroke:var(--red)" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><p style="color:var(--gray-700)">Drivers listed here have <strong style="color:var(--red)">not made any payment in the last 3+ days</strong>. Each batch pays every 3 days — drivers are flagged after missing one full cycle.</p></div>
-      <div class="card"><div class="card-header"><span class="card-title">Drivers Requiring Follow-Up</span><div style="display:flex;align-items:center;gap:10px"><button class="btn btn-primary btn-sm" onclick="openBatchPayModal()">💰 Bulk Pay a Batch</button><span class="badge badge-red" id="alertCount">0 drivers</span></div></div><div class="card-body" id="alertsList"></div></div>
+      <div class="card"><div class="card-header"><span class="card-title">Drivers Requiring Follow-Up</span><div style="display:flex;align-items:center;gap:10px"><button class="btn btn-primary btn-sm" id="bulkPayBtn" onclick="openBatchPayModal()" style="display:none">💰 Bulk Pay a Batch</button><span class="badge badge-red" id="alertCount">0 drivers</span></div></div><div class="card-body" id="alertsList"></div></div>
     </div>
 
     <!-- PAYMENTS -->
