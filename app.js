@@ -494,7 +494,7 @@ async function bootstrap() {
       sb.selectAll('keke_payments', 'order=payment_date.desc'),
       sb.select('keke_complaints', 'order=created_at.desc'),
       sb.select('keke_service_records', 'order=created_at.desc'),
-      sb.select('keke_documents', 'order=uploaded_at.desc'),
+      sb.select('keke_documents', 'select=id,keke_id,name,type,size,uploaded_by,uploaded_at&order=uploaded_at.desc'),
       sb.select('maymoon_activity_log', 'order=timestamp.desc&limit=500'),
       sb.getSetting('holiday'),
       sb.getSetting('batch_schedules'),
@@ -590,6 +590,29 @@ async function _sbDeleteComplaint(id) { try { setSyncStatus('syncing'); await sb
 async function _sbSaveServiceRecord(r) { try { setSyncStatus('syncing'); await sb.insert('keke_service_records',r); CACHE.serviceRecords.unshift(r); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
 async function _sbDeleteServiceRecord(id) { try { setSyncStatus('syncing'); await sb.delete('keke_service_records',`id=eq.${id}`); CACHE.serviceRecords=CACHE.serviceRecords.filter(r=>r.id!==id); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
 async function _sbSaveDocument(doc) { try { setSyncStatus('syncing'); const row={...doc, data_url:doc.dataUrl||doc.data_url}; delete row.dataUrl; await sb.insert('keke_documents',row); CACHE.documents.unshift(row); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
+// Bootstrap intentionally excludes each document's file content (see the
+// select= filter above) — a page refresh should only download the file
+// list, not every uploaded file's full content. This fetches one
+// document's actual data on demand, right when someone clicks Download.
+async function dbGetDocumentContent(docId){
+  const rows = await sb.select('keke_documents', `id=eq.${docId}&select=data_url`);
+  return rows.length ? (rows[0].data_url||null) : null;
+}
+async function downloadDocument(btn, docId, name){
+  const original = btn ? btn.innerHTML : null;
+  if(btn){ btn.innerHTML='<div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0 auto"></div>'; btn.style.pointerEvents='none'; }
+  try{
+    const dataUrl = await dbGetDocumentContent(docId);
+    if(!dataUrl){ toast('Could not load that file — it may have been removed.','error'); return; }
+    const a=document.createElement('a');
+    a.href=dataUrl; a.download=name||'document';
+    document.body.appendChild(a); a.click(); a.remove();
+  }catch(e){
+    toast('Error downloading file: '+e.message,'error');
+  }finally{
+    if(btn){ btn.innerHTML=original; btn.style.pointerEvents=''; }
+  }
+}
 async function _sbDeleteDocument(id) { try { setSyncStatus('syncing'); await sb.delete('keke_documents',`id=eq.${id}`); CACHE.documents=CACHE.documents.filter(d=>d.id!==id); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
 async function _sbLogActivity(entry) { try { await sb.insert('maymoon_activity_log',{...entry,timestamp:entry.timestamp||new Date().toISOString()}); CACHE.activityLog.unshift(entry); if(CACHE.activityLog.length>500)CACHE.activityLog.length=500; } catch(e){ console.error('Activity log:',e); } }
 
@@ -1953,7 +1976,7 @@ function closeDetailModal(){document.getElementById('detailModal').classList.rem
 function renderDocList(docs, kekeId) {
   if(!docs.length) return '<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No documents uploaded yet. Click ➕ Add Document above to upload keke papers, permits, IDs etc.</div>';
   const typeIcon = t => /jpg|jpeg|png|gif|webp/.test(t||'')?'🖼️':t==='pdf'||t?.includes('pdf')?'📄':t?.includes('doc')?'📝':'📎';
-  return '<div class="doc-list">'+docs.map(d=>`<div class="doc-item"><div class="doc-icon">${typeIcon(d.type||d.name)}</div><div class="doc-info"><div class="doc-name">${esc(d.name)||'Document'}</div><div class="doc-meta">${esc(d.type)||''} · Uploaded ${fmtDateStr(d.uploaded_at)} by ${esc(d.uploaded_by)||'?'}</div></div><div class="doc-actions"><a href="${d.dataUrl||d.data_url}" download="${esc(d.name)||'document'}" class="btn btn-primary btn-sm" style="text-decoration:none">⬇️</a>${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocAndRefresh('${d.id}','${kekeId}')">✕</button>`:''}</div></div>`).join('')+'</div>';
+  return '<div class="doc-list">'+docs.map(d=>`<div class="doc-item"><div class="doc-icon">${typeIcon(d.type||d.name)}</div><div class="doc-info"><div class="doc-name">${esc(d.name)||'Document'}</div><div class="doc-meta">${esc(d.type)||''} · Uploaded ${fmtDateStr(d.uploaded_at)} by ${esc(d.uploaded_by)||'?'}</div></div><div class="doc-actions"><button class="btn btn-primary btn-sm" onclick="downloadDocument(this,'${d.id}','${escJs(d.name)||'document'}')">⬇️</button>${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocAndRefresh('${d.id}','${kekeId}')">✕</button>`:''}</div></div>`).join('')+'</div>';
 }
 function deleteDocAndRefresh(docId, kekeId) {
   if(!isAdmin()){toast('Admin access required.','error');return;}
@@ -2304,7 +2327,7 @@ function renderDocumentsList() {
   const container = document.getElementById('documentsList');
   if(!docs.length){container.innerHTML='<div class="empty-state" style="padding:20px 0"><p>No documents uploaded yet.</p></div>';return;}
   container.innerHTML='<div class="doc-list">'+docs.map(d=>{
-    const isImg = /\.(jpg|jpeg|png|gif|webp)$/i.test(d.name) || d.dataUrl?.startsWith('data:image');
+    const isImg = /\.(jpg|jpeg|png|gif|webp)$/i.test(d.name||'');
     const icon = isImg ? '🖼️' : (d.name?.endsWith('.pdf') ? '📄' : '📎');
     return `<div class="doc-item">
       <div class="doc-icon">${icon}</div>
@@ -2313,7 +2336,7 @@ function renderDocumentsList() {
         <div class="doc-meta">${esc(d.type)||''} &bull; Uploaded: ${fmtDateStr(d.uploaded_at)} &bull; By: ${esc(d.uploaded_by)||'?'}</div>
       </div>
       <div class="doc-actions">
-        ${d.dataUrl?`<a href="${d.dataUrl}" download="${esc(d.name)||'document'}" class="btn btn-outline btn-sm" style="text-decoration:none">⬇️ Download</a>`:''}
+        <button class="btn btn-outline btn-sm" onclick="downloadDocument(this,'${d.id}','${escJs(d.name)||'document'}')">⬇️ Download</button>
         ${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocument('${d.id}')">🗑️</button>`:''}
       </div>
     </div>`;
@@ -2323,17 +2346,24 @@ function renderDocumentsList() {
 async function handleDocUpload(input) {
   if(!input.files.length)return;
   const files = Array.from(input.files);
-  let count=0;
+  let count=0, skipped=0;
   for(const file of files){
-    const dataUrl = await new Promise(res=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(file);});
+    if(file.size>15*1024*1024){ skipped++; continue; } // matches the photo-upload size cap
+    let dataUrl = await new Promise(res=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(file);});
+    // Compress if it's an image (e.g. a scanned ID); non-image files (PDFs
+    // etc.) safely pass through unchanged — compressImage() falls back to
+    // the original when it can't be decoded as an image.
+    if(file.type.startsWith('image/')) dataUrl = await compressImage(dataUrl);
     const docId = uid();
     const docEntry = {id:docId,keke_id:currentDocsKekeId,name:file.name,type:file.type,size:file.size,dataUrl,uploaded_by:currentUser?.name||'?',uploaded_at:new Date().toISOString()};
     _sbSaveDocument(docEntry);
     count++;
   }
   const k=LOCAL.getKekes().find(x=>x.id===currentDocsKekeId);
-  logActivity(`Document uploaded: ${k?.plate||''}`,'edit',`${count} file(s) | Driver: ${k?.driver_name||''} | By: ${currentUser?.name||'?'}`);
-  toast(`${count} document(s) uploaded!`);
+  if(count) logActivity(`Document uploaded: ${k?.plate||''}`,'edit',`${count} file(s) | Driver: ${k?.driver_name||''} | By: ${currentUser?.name||'?'}`);
+  if(count && skipped) toast(`${count} document(s) uploaded. ${skipped} skipped — over 15MB.`,'error');
+  else if(count) toast(`${count} document(s) uploaded!`);
+  else toast(`All ${skipped} file(s) were too large (max 15MB each).`,'error');
   renderDocumentsList();
   // Refresh detail modal doc list if open for same keke
   if(currentDetailKekeId===currentDocsKekeId){
