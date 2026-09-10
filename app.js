@@ -10,7 +10,18 @@ const ROLE_MAP = {
   'staff@maymoon.com':   { name: 'Staff',         role: 'staff' },
 };
 
-function isAdmin() { return currentUser && currentUser.role === 'admin'; }
+// isAdmin() re-derives the role fresh from ROLE_MAP by email every time,
+// rather than trusting a "role" property that came from localStorage. This
+// closes the easy attack of opening DevTools, editing the stored
+// _currentUser JSON to say role:"admin", and reloading — since ROLE_MAP is
+// keyed by the actual logged-in email, that trick no longer grants access.
+// (True enforcement still depends on Supabase RLS policies rejecting writes
+// server-side — this only removes the trivial client-side bypass.)
+function isAdmin() {
+  if (!currentUser || !currentUser.email) return false;
+  const roleInfo = ROLE_MAP[currentUser.email.toLowerCase()];
+  return !!roleInfo && roleInfo.role === 'admin';
+}
 
 // ─── Total Outstanding show/hide (protected by a hardcoded password) ───
 
@@ -691,6 +702,21 @@ function parseFmt(el) {
   return parseFloat((el.value || '0').replace(/,/g, '')) || 0;
 }
 function uid() { return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16)}); }
+// Escapes text pulled from the database (driver names, notes, addresses,
+// complaint text, etc.) before it's dropped into an innerHTML template
+// literal — so a stray "<", ">" or quote typed by staff can't break the
+// row's markup or, worst case, run as script for whoever views it next.
+// Wrap this around raw user-entered VALUES only — never around HTML you're
+// intentionally constructing (badges, buttons, svg).
+function esc(v){ if(v===null||v===undefined)return ''; return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// Escapes text that's going inside a single-quoted JS string literal
+// embedded in an onclick="..." attribute (e.g. onclick="fn('${escJs(name)}')").
+// A plain HTML-escape (esc) isn't enough here: the browser decodes HTML
+// entities in the attribute BEFORE handing the string to the JS engine, so
+// escaping a quote as &#39; still lets it break out of the JS string. This
+// escapes the single quote as \' instead (safe in JS), and the double quote
+// as &quot; (safe in the surrounding HTML attribute, since onclick="...").
+function escJs(v){ if(v===null||v===undefined)return ''; return String(v).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/\n/g,'\\n').replace(/\r/g,''); }
 function pct(paid,total) { return total>0 ? Math.min(100,Math.round((paid/total)*100)) : 0; }
 function toast(msg,type='success') { const t=document.createElement('div'); t.className='toast '+type; t.innerHTML=type==='success'?`<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>${msg}`:`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>${msg}`; document.getElementById('toastContainer').appendChild(t); setTimeout(()=>t.remove(),3500); }
 function schedLabel(s) { return {daily:'Daily','3days':'Every 3 Days','5days':'Every 5 Days',weekly:'Weekly'}[s]||s; }
@@ -793,7 +819,40 @@ function qcClose(){
   if(_qcStream){_qcStream.getTracks().forEach(t=>t.stop());_qcStream=null;}
   const o=document.getElementById('quickCamOverlay');if(o)o.style.display='none';
 }
-async function uploadPhoto(input) { if(!input||!input.files[0])return null; return new Promise(res=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(input.files[0]);}); }
+// Resizes and re-compresses an uploaded photo before it's stored as a
+// base64 data URL directly in the database. A full-resolution phone photo
+// (often 3-8MB) saved as-is would bloat every keke row and slow down every
+// Drivers/Dashboard load as more photos pile up. Caps the longest side at
+// 900px and re-encodes as JPEG at 75% quality — plenty for an ID/reference
+// photo, and typically shrinks a multi-MB phone photo to well under 300KB.
+async function compressImage(dataUrl, maxDim=900, quality=0.75){
+  return new Promise((resolve)=>{
+    const img=new Image();
+    img.onload=()=>{
+      let{width,height}=img;
+      if(width>maxDim||height>maxDim){
+        if(width>height){height=Math.round(height*(maxDim/width));width=maxDim;}
+        else{width=Math.round(width*(maxDim/height));height=maxDim;}
+      }
+      const canvas=document.createElement('canvas');
+      canvas.width=width; canvas.height=height;
+      const ctx=canvas.getContext('2d');
+      ctx.drawImage(img,0,0,width,height);
+      try{ resolve(canvas.toDataURL('image/jpeg',quality)); }
+      catch(e){ resolve(dataUrl); } // canvas unsupported/tainted — fall back to original
+    };
+    img.onerror=()=>resolve(dataUrl); // couldn't decode as an image — keep original
+    img.src=dataUrl;
+  });
+}
+async function uploadPhoto(input) {
+  if(!input||!input.files[0])return null;
+  const file=input.files[0];
+  if(file.size>15*1024*1024){toast('Photo is too large (max 15MB). Please choose a smaller image.','error');return null;}
+  const raw=await new Promise(res=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(file);});
+  if(!file.type.startsWith('image/')) return raw; // not an image — store as-is, nothing to compress
+  return compressImage(raw);
+}
 function batchBadge(b) { if(!b)return''; const c={A:'badge-batch-a',B:'badge-batch-b',C:'badge-batch-c'}[b]||'badge-gray'; return `<span class="badge ${c}">Batch ${b}</span>`; }
 function statusBadge(s) { const m={active:'🟢 Active',repossession:'🔴 Repossession',on_repair:'🔧 On Repair',completed:'✅ Completed'}; return `<span class="driver-status ${s||'active'}">${m[s]||'🟢 Active'}</span>`; }
 function isOnBreak(batch) {
@@ -882,8 +941,8 @@ function handleGlobalSearch(q) {
       <div class="gsr-item" onclick="closeGlobalSearch();openDetail('${k.id}')">
         <div style="font-size:1.2rem">${k.status==='completed'?'✅':'🛺'}</div>
         <div>
-          <div class="gsr-label">${k.driver_name} · ${k.plate}</div>
-          <div class="gsr-sub">${batchBadge(k.batch)} ${statusBadge(k.status)} · Shorty: ${k.shorty_name||'—'} · Balance: ${fmt(k.total_loan-k.paid)}</div>
+          <div class="gsr-label">${esc(k.driver_name)} · ${esc(k.plate)}</div>
+          <div class="gsr-sub">${batchBadge(k.batch)} ${statusBadge(k.status)} · Shorty: ${esc(k.shorty_name)||'—'} · Balance: ${fmt(k.total_loan-k.paid)}</div>
         </div>
       </div>`).join('');
     box.style.display = 'block';
@@ -909,25 +968,25 @@ function renderHoliday() {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
         <div>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">${batchBadge(batch)} ${onBreak?'<span style="background:#fef3c7;color:#92400e;font-size:.72rem;font-weight:700;padding:2px 9px;border-radius:20px;border:1px solid #fcd34d">⏸️ ON BREAK</span>':'<span style="background:#dcfce7;color:#166534;font-size:.72rem;font-weight:700;padding:2px 9px;border-radius:20px;border:1px solid #bbf7d0">▶️ ACTIVE</span>'}</div>
-          ${onBreak?`<div style="font-size:.79rem;color:var(--gray-600);margin-top:3px">Break from <strong>${startDate||'—'}</strong> → Resumes <strong>${resumeDate||'—'}</strong>${reason?` &bull; <em>${reason}</em>`:''}</div>`:'<div style="font-size:.79rem;color:var(--gray-500)">No active break</div>'}
+          ${onBreak?`<div style="font-size:.79rem;color:var(--gray-600);margin-top:3px">Break from <strong>${esc(startDate)||'—'}</strong> → Resumes <strong>${esc(resumeDate)||'—'}</strong>${reason?` &bull; <em>${esc(reason)}</em>`:''}</div>`:'<div style="font-size:.79rem;color:var(--gray-500)">No active break</div>'}
         </div>
         ${onBreak?`<button class="btn btn-outline btn-sm" onclick="clearBreak('${batch}')">✕ Clear Break</button>`:''}
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">
         <div class="form-group" style="margin:0">
           <label style="font-size:.73rem;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:.5px">📅 Break Start Date</label>
-          <input type="date" id="hstart_${batch}" class="form-control" value="${startDate}" style="margin-top:5px">
+          <input type="date" id="hstart_${batch}" class="form-control" value="${esc(startDate)}" style="margin-top:5px">
           <div style="font-size:.69rem;color:var(--gray-400);margin-top:3px">First day of the break</div>
         </div>
         <div class="form-group" style="margin:0">
           <label style="font-size:.73rem;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:.5px">📅 Resume Date</label>
-          <input type="date" id="holiday_${batch}" class="form-control" value="${resumeDate}" style="margin-top:5px">
+          <input type="date" id="holiday_${batch}" class="form-control" value="${esc(resumeDate)}" style="margin-top:5px">
           <div style="font-size:.69rem;color:var(--gray-400);margin-top:3px">Day drivers resume payment</div>
         </div>
       </div>
       <div class="form-group" style="margin:0">
         <label style="font-size:.73rem;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:.5px">📝 Reason for Break</label>
-        <input type="text" id="hreason_${batch}" class="form-control" value="${reason}" placeholder="e.g. Eid holiday, End of year break, Market day..." style="margin-top:5px">
+        <input type="text" id="hreason_${batch}" class="form-control" value="${esc(reason)}" placeholder="e.g. Eid holiday, End of year break, Market day..." style="margin-top:5px">
       </div>
     </div>`;
   }).join('');
@@ -947,8 +1006,8 @@ function renderHoliday() {
         <div>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">${batchBadge(b)}<span style="font-weight:700;color:#92400e;font-size:.86rem">⏸️ On Break</span></div>
           <div style="font-size:.8rem;color:#78350f">
-            <strong>From:</strong> ${startDate||'—'} &nbsp;→&nbsp; <strong>Resumes:</strong> ${resume||'—'}
-            ${reason?`<br><strong>Reason:</strong> ${reason}`:''}
+            <strong>From:</strong> ${esc(startDate)||'—'} &nbsp;→&nbsp; <strong>Resumes:</strong> ${esc(resume)||'—'}
+            ${reason?`<br><strong>Reason:</strong> ${esc(reason)}`:''}
           </div>
           <div style="font-size:.75rem;color:#92400e;margin-top:4px;font-weight:600">${daysLeft>0?`⏱️ ${daysLeft} day(s) remaining`:'⚠️ Should have resumed already'}</div>
         </div>
@@ -1031,14 +1090,14 @@ async function refreshDashboard() {
   // Active loans table
   const tbody=document.getElementById('dashLoansTable');
   if(!active.length){tbody.innerHTML='<tr><td colspan="5"><div class="empty-state"><p>No active loans</p></div></td></tr>';}
-  else tbody.innerHTML=active.slice(0,8).map(k=>{const p=pct(k.paid,k.total_loan),bal=k.total_loan-k.paid;return`<tr><td><strong>${k.driver_name}</strong></td><td><span class="badge badge-gray">${k.plate}</span></td><td>${batchBadge(k.batch)}</td><td style="min-width:120px"><div class="progress-wrap"><div class="progress-bar${p<30?' danger':p<70?' warning':''}" style="width:${p}%"></div></div><div class="progress-label"><span>${p}%</span><span>${fmt(k.paid)}</span></div></td><td style="color:var(--red);font-weight:700">${fmt(bal)}</td></tr>`;}).join('');
+  else tbody.innerHTML=active.slice(0,8).map(k=>{const p=pct(k.paid,k.total_loan),bal=k.total_loan-k.paid;return`<tr><td><strong>${esc(k.driver_name)}</strong></td><td><span class="badge badge-gray">${esc(k.plate)}</span></td><td>${batchBadge(k.batch)}</td><td style="min-width:120px"><div class="progress-wrap"><div class="progress-bar${p<30?' danger':p<70?' warning':''}" style="width:${p}%"></div></div><div class="progress-label"><span>${p}%</span><span>${fmt(k.paid)}</span></div></td><td style="color:var(--red);font-weight:700">${fmt(bal)}</td></tr>`;}).join('');
 
   // Nearly done (< 5 payments left)
   const nearlyDone=active.filter(k=>{const bal=k.total_loan-k.paid;return bal>0&&bal<=k.installment_amount*5;}).sort((a,b)=>(a.total_loan-a.paid)-(b.total_loan-b.paid));
   document.getElementById('nearlyDoneCount').textContent=nearlyDone.length;
   const ndList=document.getElementById('nearlyDoneList');
   if(!nearlyDone.length){ndList.innerHTML='<div class="empty-state"><p>No drivers near completion yet</p></div>';}
-  else ndList.innerHTML=nearlyDone.map(k=>{const bal=k.total_loan-k.paid;const left=Math.ceil(bal/k.installment_amount);return`<div class="nearly-done-item"><div class="ndi-info"><div class="ndi-name">🛺 ${k.driver_name} · ${k.plate}</div><div class="ndi-sub">${batchBadge(k.batch)} · Balance: ${fmt(bal)}</div></div><span class="ndi-badge">${left} payment${left!==1?'s':''} left</span></div>`;}).join('');
+  else ndList.innerHTML=nearlyDone.map(k=>{const bal=k.total_loan-k.paid;const left=Math.ceil(bal/k.installment_amount);return`<div class="nearly-done-item"><div class="ndi-info"><div class="ndi-name">🛺 ${esc(k.driver_name)} · ${esc(k.plate)}</div><div class="ndi-sub">${batchBadge(k.batch)} · Balance: ${fmt(bal)}</div></div><span class="ndi-badge">${left} payment${left!==1?'s':''} left</span></div>`;}).join('');
 }
 
 function getOverdueDrivers(kekes,payments) {
@@ -1142,7 +1201,7 @@ async function renderReports() {
       <div class="card-header"><span class="card-title">⚠️ Short Payments in Period</span><span class="badge badge-red">${shortPays.length}</span></div>
       <div class="table-wrap"><table>
         <thead><tr><th>Date</th><th>Driver</th><th>Plate</th><th>Paid</th><th>Expected</th><th>Shortfall</th></tr></thead>
-        <tbody>${shortPays.map(p=>`<tr class="pay-short-row"><td>${fmtDateStr(p.payment_date,{day:'numeric',month:'short'})}</td><td>${p.driver_name}</td><td>${p.plate}</td><td class="pay-short">${fmt(p.amount)}</td><td>${fmt(p.expected_amount)}</td><td style="color:var(--red);font-weight:700">${fmt((p.expected_amount||0)-p.amount)}</td></tr>`).join('')}</tbody>
+        <tbody>${shortPays.map(p=>`<tr class="pay-short-row"><td>${fmtDateStr(p.payment_date,{day:'numeric',month:'short'})}</td><td>${esc(p.driver_name)}</td><td>${esc(p.plate)}</td><td class="pay-short">${fmt(p.amount)}</td><td>${fmt(p.expected_amount)}</td><td style="color:var(--red);font-weight:700">${fmt((p.expected_amount||0)-p.amount)}</td></tr>`).join('')}</tbody>
       </table></div>
     </div>`:''}`;
 }
@@ -1193,9 +1252,9 @@ async function renderShorties() {
     const outstanding=active.reduce((ss,k)=>ss+(k.total_loan-k.paid),0);
     return `<div class="shorty-card">
       <div class="shorty-card-header">
-        ${s.photo?`<img src="${s.photo}" style="width:44px;height:44px;border-radius:50%;object-fit:cover">`:`<div class="shorty-avatar">${s.name.charAt(0).toUpperCase()}</div>`}
-        <div><div class="shorty-name">🔗 ${s.name}</div><div class="shorty-phone">📞 ${s.phone||'—'} ${s.address?'· 📍 '+s.address:''}</div></div>
-        <div style="margin-left:auto"><button class="btn btn-call btn-sm" onclick="callDriver('${s.phone}')"><svg style="width:11px;height:11px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.6 3.35 2 2 0 0 1 3.56 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.91a16 16 0 0 0 6 6l.91-.91a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>Call</button></div>
+        ${s.photo?`<img src="${s.photo}" style="width:44px;height:44px;border-radius:50%;object-fit:cover">`:`<div class="shorty-avatar">${esc(s.name.charAt(0).toUpperCase())}</div>`}
+        <div><div class="shorty-name">🔗 ${esc(s.name)}</div><div class="shorty-phone">📞 ${esc(s.phone)||'—'} ${s.address?'· 📍 '+esc(s.address):''}</div></div>
+        <div style="margin-left:auto"><button class="btn btn-call btn-sm" onclick="callDriver('${escJs(s.phone)}')"><svg style="width:11px;height:11px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.6 3.35 2 2 0 0 1 3.56 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.91a16 16 0 0 0 6 6l.91-.91a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>Call</button></div>
       </div>
       <div class="shorty-stats">
         <div class="shorty-stat"><div class="ss-val">${s.drivers.length}</div><div class="ss-lbl">Total Drivers</div></div>
@@ -1209,7 +1268,7 @@ async function renderShorties() {
         <div style="background:var(--red-bg);border-radius:var(--radius-sm);padding:10px;text-align:center"><div style="font-size:.85rem;font-weight:800;color:var(--red)">${fmt(outstanding)}</div><div style="font-size:.67rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Outstanding</div></div>
       </div>
       <div style="border-top:1px solid var(--gray-200);padding-top:12px"><div style="font-size:.73rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Drivers Brought</div>
-      <div style="display:flex;flex-direction:column;gap:5px">${s.drivers.map(k=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:var(--gray-50);border-radius:var(--radius-sm);font-size:.82rem"><span><strong>${k.driver_name}</strong> · ${k.plate} ${batchBadge(k.batch)}</span><div style="display:flex;gap:6px;align-items:center">${statusBadge(k.status)}<button class="btn btn-outline btn-sm" style="padding:3px 8px;font-size:.72rem" onclick="openDetail('${k.id}')">View</button></div></div>`).join('')}</div>
+      <div style="display:flex;flex-direction:column;gap:5px">${s.drivers.map(k=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:var(--gray-50);border-radius:var(--radius-sm);font-size:.82rem"><span><strong>${esc(k.driver_name)}</strong> · ${esc(k.plate)} ${batchBadge(k.batch)}</span><div style="display:flex;gap:6px;align-items:center">${statusBadge(k.status)}<button class="btn btn-outline btn-sm" style="padding:3px 8px;font-size:.72rem" onclick="openDetail('${k.id}')">View</button></div></div>`).join('')}</div>
       </div>
     </div>`;
   }).join('');
@@ -1286,6 +1345,10 @@ async function saveKeke() {
   const start=document.getElementById('k_start').value;
   const batch=document.getElementById('k_batch').value;
   if(!validateRequiredFields(ADD_KEKE_REQUIRED)){toast('Fill in all required (*) fields — highlighted in red.','error');return;}
+  if(cost<=0||totalLoan<=0||inst<=0){toast('Cost, Total Loan, and Installment Amount must all be greater than zero.','error');return;}
+  if(totalLoan<cost && !confirm(`Total Loan (${fmt(totalLoan)}) is less than Cost (${fmt(cost)}) — this keke would be registered at a loss. Continue anyway?`))return;
+  const existingKeke=(await dbGetKekes()).find(k=>k.plate===plate);
+  if(existingKeke){toast(`Plate ${plate} is already registered to ${existingKeke.driver_name} (${existingKeke.status}). Use a different plate, or edit the existing record instead.`,'error');return;}
   const btn=document.getElementById('saveKekeBtn'); btn.innerHTML='<div class="spinner"></div> Saving...'; btn.disabled=true;
   try {
     const [shortyPhotoUrl,driverPhotoUrl,guarantorPhotoUrl]=await Promise.all([uploadPhoto(document.getElementById('shortyPhotoInput')),uploadPhoto(document.getElementById('driverPhotoInput')),uploadPhoto(document.getElementById('guarantorPhotoInput'))]);
@@ -1338,7 +1401,7 @@ async function renderDrivers() {
   grid.innerHTML=kekes.map(k=>{
     const p=pct(k.paid,k.total_loan),bal=k.total_loan-k.paid,done=k.status==='completed';
     const paused=k.status==='on_repair'||k.status==='repossession'||done;
-    const avatarHtml=k.driver_photo_url?`<img src="${k.driver_photo_url}" class="keke-avatar" alt="${k.driver_name}">`:`<div class="keke-avatar-placeholder">👤</div>`;
+    const avatarHtml=k.driver_photo_url?`<img src="${k.driver_photo_url}" class="keke-avatar" alt="${esc(k.driver_name)}">`:`<div class="keke-avatar-placeholder">👤</div>`;
     const editBtn=isAdmin()?`<button class="btn btn-primary btn-sm" onclick="openEditKekeModal('${k.id}')">✏️ Edit</button>`:'';
     // Pay button — only shown for active drivers
     const payBtn=!paused
@@ -1355,7 +1418,7 @@ async function renderDrivers() {
     </select>`:'';
     return `<div class="keke-card">
       <div class="keke-card-header${done?' completed':k.status==='on_repair'?' on-repair':k.status==='repossession'?' repo':''}">
-        <div class="keke-plate">🛺 ${k.pt_number?`PT: ${k.pt_number}`:'PT: —'}${k.plate?` <span style="font-size:.72rem;opacity:.7">${k.plate}</span>`:''}</div>
+        <div class="keke-plate">🛺 ${k.pt_number?`PT: ${esc(k.pt_number)}`:'PT: —'}${k.plate?` <span style="font-size:.72rem;opacity:.7">${esc(k.plate)}</span>`:''}</div>
         <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${batchBadge(k.batch)} ${breakTag}</div>
       </div>
       <div class="keke-card-body">
@@ -1363,7 +1426,7 @@ async function renderDrivers() {
           ${statusBadge(k.status)}
           ${statusDropdown}
         </div>
-        <div class="keke-driver-row" style="margin-top:4px">${avatarHtml}<div><div class="keke-driver">${k.driver_name}</div><div class="keke-phone">📞 ${k.driver_phone}${k.driver_address?' · 📍 '+k.driver_address:''}</div>${k.guarantor_name?`<div style="font-size:.73rem;color:#0369a1;margin-top:2px">G- ${k.guarantor_name}${k.guarantor_phone?' · '+k.guarantor_phone:''}</div>`:''}</div></div>
+        <div class="keke-driver-row" style="margin-top:4px">${avatarHtml}<div><div class="keke-driver">${esc(k.driver_name)}</div><div class="keke-phone">📞 ${esc(k.driver_phone)}${k.driver_address?' · 📍 '+esc(k.driver_address):''}</div>${k.guarantor_name?`<div style="font-size:.73rem;color:#0369a1;margin-top:2px">G- ${esc(k.guarantor_name)}${k.guarantor_phone?' · '+esc(k.guarantor_phone):''}</div>`:''}</div></div>
         <div class="keke-amounts">
           <div class="keke-amt"><div class="al">Loan</div><div class="av">${fmt(k.total_loan)}</div></div>
           <div class="keke-amt"><div class="al">Paid</div><div class="av green">${fmt(k.paid)}</div></div>
@@ -1373,8 +1436,8 @@ async function renderDrivers() {
         <div class="progress-label"><span>${p}% paid</span><span>${fmt(k.installment_amount)} / instalment</span></div>
       </div>
       <div class="keke-card-footer">
-        <button class="btn btn-call btn-sm" onclick="callDriver('${k.driver_phone}')"><svg style="width:12px;height:12px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.6 3.35 2 2 0 0 1 3.56 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.91a16 16 0 0 0 6 6l.91-.91a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>Call</button>
-        <button class="btn btn-sms btn-sm" onclick="smsDriver('${k.driver_phone}','${k.driver_name}','${k.plate}',${bal})"><svg style="width:12px;height:12px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>SMS</button>
+        <button class="btn btn-call btn-sm" onclick="callDriver('${escJs(k.driver_phone)}')"><svg style="width:12px;height:12px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.6 3.35 2 2 0 0 1 3.56 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.91a16 16 0 0 0 6 6l.91-.91a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>Call</button>
+        <button class="btn btn-sms btn-sm" onclick="smsDriver('${escJs(k.driver_phone)}','${escJs(k.driver_name)}','${escJs(k.plate)}',${bal})"><svg style="width:12px;height:12px;fill:none;stroke:white;stroke-width:2.5" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>SMS</button>
         <button class="btn btn-outline btn-sm" onclick="openDetail('${k.id}')">Details</button>
         <button class="btn btn-outline btn-sm" onclick="openDriverPayLog('${k.id}')">Payment History</button>
         <button class="btn btn-outline btn-sm" onclick="openComplaintModal('${k.id}')">📋</button>
@@ -1419,7 +1482,7 @@ function renderDriverPayLogModal(){
       :`${fmt(p.amount)}${p.is_short?' ⚠️':''}`;
     const rowClass=isZero?'pay-zero-row':p.is_short?'pay-short-row':hasOver?'pay-over-row':'';
     const cellClass=isZero?'pay-zero':p.is_short?'pay-short':hasOver?'pay-over':'';
-    return`<tr class="${rowClass}"><td>${fmtDateStr(p.payment_date)}</td><td class="${cellClass}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
+    return`<tr class="${rowClass}"><td>${fmtDateStr(p.payment_date)}</td><td class="${cellClass}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${esc(p.note)||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
   }).join('');
 }
 
@@ -1468,7 +1531,7 @@ async function renderAlerts(){
     const lastPay=kp.length?kp.reduce((a,b)=>new Date(a.payment_date)>new Date(b.payment_date)?a:b):null;
     const daysAgo=lastPay?Math.floor((Date.now()-new Date(lastPay.payment_date).getTime())/86400000):'Never paid';
     const bal=k.total_loan-k.paid;
-    return`<div class="overdue-item"><div class="oi-info"><div class="oi-name" onclick="openDetail('${k.id}')" style="cursor:pointer" title="View driver card">🛺 ${k.driver_name} &nbsp;<span class="badge badge-gray">${k.pt_number||k.plate}</span> ${batchBadge(k.batch)}</div><div class="oi-detail">Balance: <strong style="color:var(--red)">${fmt(bal)}</strong> · Last payment: <strong>${typeof daysAgo==='number'?daysAgo+' days ago':daysAgo}</strong> · 📞 ${k.driver_phone}</div></div><div class="oi-actions"><button class="btn btn-call btn-sm" onclick="callDriver('${k.driver_phone}')">Call</button><button class="btn btn-sms btn-sm" onclick="smsDriver('${k.driver_phone}','${k.driver_name}','${k.plate}',${bal})">SMS</button><button class="btn btn-primary btn-sm" onclick="openPaymentModal('${k.id}')">Pay</button></div></div>`;
+    return`<div class="overdue-item"><div class="oi-info"><div class="oi-name" onclick="openDetail('${k.id}')" style="cursor:pointer" title="View driver card">🛺 ${esc(k.driver_name)} &nbsp;<span class="badge badge-gray">${esc(k.pt_number||k.plate)}</span> ${batchBadge(k.batch)}</div><div class="oi-detail">Balance: <strong style="color:var(--red)">${fmt(bal)}</strong> · Last payment: <strong>${typeof daysAgo==='number'?daysAgo+' days ago':daysAgo}</strong> · 📞 ${esc(k.driver_phone)}</div></div><div class="oi-actions"><button class="btn btn-call btn-sm" onclick="callDriver('${escJs(k.driver_phone)}')">Call</button><button class="btn btn-sms btn-sm" onclick="smsDriver('${escJs(k.driver_phone)}','${escJs(k.driver_name)}','${escJs(k.plate)}',${bal})">SMS</button><button class="btn btn-primary btn-sm" onclick="openPaymentModal('${k.id}')">Pay</button></div></div>`;
   }).join('')+'</div>';
 }
 
@@ -1504,7 +1567,7 @@ async function renderPayments(){
     const rowClass2=isZero2?'pay-zero-row':p.is_short?'pay-short-row':hasOver?'pay-over-row':'';
     const cellClass2=isZero2?'pay-zero':p.is_short?'pay-short':hasOver?'pay-over':'';
     const ptNo=(kekeMap[p.keke_id]&&kekeMap[p.keke_id].pt_number)||p.pt_number||'—';
-    return`<tr class="${rowClass2}"><td>${fmtDateStr(p.payment_date)}</td><td><strong style="cursor:pointer;color:var(--red)" onclick="openDriverPayLog('${p.keke_id}')" title="Click to open ${p.driver_name}'s card">${p.driver_name}</strong></td><td><span class="badge badge-gray">${ptNo}</span></td><td>${batchBadge(p.batch)}</td><td class="${cellClass2}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${p.note||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
+    return`<tr class="${rowClass2}"><td>${fmtDateStr(p.payment_date)}</td><td><strong style="cursor:pointer;color:var(--red)" onclick="openDriverPayLog('${p.keke_id}')" title="Click to open ${esc(p.driver_name)}'s card">${esc(p.driver_name)}</strong></td><td><span class="badge badge-gray">${esc(ptNo)}</span></td><td>${batchBadge(p.batch)}</td><td class="${cellClass2}" style="font-weight:700">${amountCell}</td><td style="color:var(--red)">${p.balance_after<=0?'<span class="badge badge-green">CLEARED ✓</span>':fmt(p.balance_after)}</td><td style="color:var(--gray-500)">${esc(p.note)||'—'}</td><td>${actionsCol(p.id)}</td></tr>`;
   }).join('');
 }
 async function deletePaymentById(payId){if(!isAdmin()){toast('Admin access required','error');return;}if(!confirm('Delete this payment?'))return;editingPaymentId=payId;await deletePayment();}
@@ -1512,7 +1575,7 @@ async function deletePaymentById(payId){if(!isAdmin()){toast('Admin access requi
 // ═══════════════════════════════════════════════════════════════
 //  COMPLETED
 // ═══════════════════════════════════════════════════════════════
-async function renderCompleted(){const kekes=(await dbGetKekes()).filter(k=>k.status==='completed');document.getElementById('completedCount').textContent=kekes.length+' kekes';const tbody=document.getElementById('completedTable');if(!kekes.length){tbody.innerHTML='<tr><td colspan="7"><div class="empty-state"><p>No completed loans yet</p></div></td></tr>';return;}tbody.innerHTML=kekes.map(k=>`<tr><td><strong>${k.driver_name}</strong><div style="font-size:.76rem;color:var(--gray-500)">${k.driver_phone}</div></td><td><span class="badge badge-gray">${k.plate}</span>${k.pt_number?`<div style="font-size:.74rem;color:var(--gray-500)">PT: ${k.pt_number}</div>`:''}</td><td>${batchBadge(k.batch)}</td><td>${fmt(k.cost)}</td><td style="color:var(--green);font-weight:700">${fmt(k.paid)}</td><td style="color:#7c3aed;font-weight:700">${fmt(k.paid-k.cost)}</td><td>${k.completed_at?fmtDateStr(k.completed_at):'—'}</td></tr>`).join('');}
+async function renderCompleted(){const kekes=(await dbGetKekes()).filter(k=>k.status==='completed');document.getElementById('completedCount').textContent=kekes.length+' kekes';const tbody=document.getElementById('completedTable');if(!kekes.length){tbody.innerHTML='<tr><td colspan="7"><div class="empty-state"><p>No completed loans yet</p></div></td></tr>';return;}tbody.innerHTML=kekes.map(k=>`<tr><td><strong>${esc(k.driver_name)}</strong><div style="font-size:.76rem;color:var(--gray-500)">${esc(k.driver_phone)}</div></td><td><span class="badge badge-gray">${esc(k.plate)}</span>${k.pt_number?`<div style="font-size:.74rem;color:var(--gray-500)">PT: ${esc(k.pt_number)}</div>`:''}</td><td>${batchBadge(k.batch)}</td><td>${fmt(k.cost)}</td><td style="color:var(--green);font-weight:700">${fmt(k.paid)}</td><td style="color:#7c3aed;font-weight:700">${fmt(k.paid-k.cost)}</td><td>${k.completed_at?fmtDateStr(k.completed_at):'—'}</td></tr>`).join('');}
 
 // ═══════════════════════════════════════════════════════════════
 //  PAYMENT MODAL
@@ -1724,7 +1787,7 @@ function renderComplaintList(){
   const container=document.getElementById('complaintList');
   if(!comps.length){container.innerHTML='<div class="empty-state" style="padding:16px 0"><p>No complaints recorded yet.</p></div>';return;}
   const catLabel={payment:'💳 Payment Issue',behaviour:'😤 Behaviour',accident:'🔧 Accident/Damage',missing:'❓ Missing/No Contact',other:'📌 Other'};
-  container.innerHTML=`<div style="font-size:.76rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${comps.length} Record(s)</div>`+comps.map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><div style="display:flex;align-items:center;gap:8px"><span class="comp-date">${fmtDateStr(c.date)}</span>${isAdmin()?`<button class="comp-del" onclick="deleteComplaint('${c.id}')">✕</button>`:''}</div></div><div class="comp-text">${c.text}</div>${c.recorded_by?`<div style="font-size:.71rem;color:var(--gray-400);margin-top:4px">By: ${c.recorded_by}</div>`:''}</div>`).join('');
+  container.innerHTML=`<div style="font-size:.76rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${comps.length} Record(s)</div>`+comps.map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||esc(c.category)}</span><div style="display:flex;align-items:center;gap:8px"><span class="comp-date">${fmtDateStr(c.date)}</span>${isAdmin()?`<button class="comp-del" onclick="deleteComplaint('${c.id}')">✕</button>`:''}</div></div><div class="comp-text">${esc(c.text)}</div>${c.recorded_by?`<div style="font-size:.71rem;color:var(--gray-400);margin-top:4px">By: ${esc(c.recorded_by)}</div>`:''}</div>`).join('');
 }
 function saveComplaint(){const text=document.getElementById('comp_text').value.trim();const date=document.getElementById('comp_date').value;const category=document.getElementById('comp_category').value;if(!text||!date){toast('Enter complaint text and date.','error');return;}const c={id:uid(),keke_id:currentComplaintKekeId,text,date,category,recorded_by:currentUser?.name||'?',created_at:new Date().toISOString()};_sbSaveComplaint(c);const k=LOCAL.getKekes().find(x=>x.id===currentComplaintKekeId);logActivity(`Complaint: ${k?.plate||''}`,'complaint',`Driver: ${k?.driver_name||''} | ${category} | ${text.slice(0,50)} | By: ${currentUser?.name||'?'}`);document.getElementById('comp_text').value='';renderComplaintList();toast('Complaint recorded.');}
 function deleteComplaint(compId){if(!isAdmin()){toast('Admin access required.','error');return;}if(!confirm('Delete this complaint?'))return;CACHE.complaints=(CACHE.complaints||[]).filter(c=>c.id!==compId);_sbDeleteComplaint(compId);renderComplaintList();toast('Deleted.','error');}
@@ -1737,7 +1800,7 @@ function deleteComplaint(compId){if(!isAdmin()){toast('Admin access required.','
 //  REPOSSESSION / REASSIGN
 // ═══════════════════════════════════════════════════════════════
 let currentRepoKekeId=null;
-async function openRepoModal(kekeId){if(!isAdmin()){toast('Admin access required.','error');return;}currentRepoKekeId=kekeId;const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===kekeId);if(!k)return;document.getElementById('repoTitle').textContent=`Reassign ${k.plate}`;document.getElementById('repoKekeInfo').innerHTML=`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Keke <strong>${k.plate}</strong> being reassigned from <strong>${k.driver_name}</strong>. Same keke details kept. New loan starts from scratch.</p>`;document.getElementById('repo_start').value=getTodayStr();document.getElementById('repo_total').value='';document.getElementById('repo_inst').value=k.installment_amount?Number(k.installment_amount).toLocaleString('en-NG'):'';document.getElementById('repo_schedule').value=k.schedule||'3days';document.getElementById('repo_batch').value=k.batch||'';['repo_driver','repo_phone','repo_phone2','repo_address','repo_guarantor','repo_gphone','repo_gaddress','repo_shorty','repo_shorty_phone','repo_notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('repo_grel').value='';document.getElementById('repoModal').classList.add('active');}
+async function openRepoModal(kekeId){if(!isAdmin()){toast('Admin access required.','error');return;}currentRepoKekeId=kekeId;const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===kekeId);if(!k)return;document.getElementById('repoTitle').textContent=`Reassign ${k.plate}`;document.getElementById('repoKekeInfo').innerHTML=`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><p>Keke <strong>${esc(k.plate)}</strong> being reassigned from <strong>${esc(k.driver_name)}</strong>. Same keke details kept. New loan starts from scratch.</p>`;document.getElementById('repo_start').value=getTodayStr();document.getElementById('repo_total').value='';document.getElementById('repo_inst').value=k.installment_amount?Number(k.installment_amount).toLocaleString('en-NG'):'';document.getElementById('repo_schedule').value=k.schedule||'3days';document.getElementById('repo_batch').value=k.batch||'';['repo_driver','repo_phone','repo_phone2','repo_address','repo_guarantor','repo_gphone','repo_gaddress','repo_shorty','repo_shorty_phone','repo_notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('repo_grel').value='';document.getElementById('repoModal').classList.add('active');}
 function closeRepoModal(){document.getElementById('repoModal').classList.remove('active');currentRepoKekeId=null;}
 async function saveReassign(){
   if(!isAdmin()){toast('Admin access required.','error');return;}
@@ -1765,7 +1828,7 @@ async function saveReassign(){
 let editingKekeId=null;
 async function openEditKekeModal(id){if(!isAdmin()){toast('Admin access required.','error');return;}const kekes=await dbGetKekes();const k=kekes.find(x=>x.id===id);if(!k)return;editingKekeId=id;document.getElementById('editKekeTitle').textContent=`Edit — ${k.plate} (${k.driver_name})`;const f={ek_plate:'plate',ek_pt:'pt_number',ek_desc:'description',ek_chassis:'chassis_number',ek_engine:'engine_number'};Object.entries(f).forEach(([el,kk])=>document.getElementById(el).value=k[kk]||'');document.getElementById('ek_year').value='';document.getElementById('ek_cost').value=k.cost?Number(k.cost).toLocaleString('en-NG'):'';document.getElementById('ek_total').value=k.total_loan?Number(k.total_loan).toLocaleString('en-NG'):'';document.getElementById('ek_paid').value=k.paid?Number(k.paid).toLocaleString('en-NG'):'';document.getElementById('ek_inst').value=k.installment_amount?Number(k.installment_amount).toLocaleString('en-NG'):'';document.getElementById('ek_schedule').value=k.schedule||'daily';document.getElementById('ek_batch').value=k.batch||'';document.getElementById('ek_start').value=k.start_date||'';document.getElementById('ek_status').value=k.status||'active';document.getElementById('ek_shorty').value=k.shorty_name||'';document.getElementById('ek_shorty_phone').value=k.shorty_phone||'';document.getElementById('ek_shorty_address').value=k.shorty_address||'';document.getElementById('ek_driver').value=k.driver_name||'';document.getElementById('ek_phone').value=k.driver_phone||'';document.getElementById('ek_phone2').value=k.driver_alt_phone||'';document.getElementById('ek_address').value=k.driver_address||'';document.getElementById('ek_guarantor').value=k.guarantor_name||'';document.getElementById('ek_gphone').value=k.guarantor_phone||'';document.getElementById('ek_grel').value=k.guarantor_relationship||'';document.getElementById('ek_gaddress').value=k.guarantor_address||'';document.getElementById('ek_notes').value=k.notes||'';document.getElementById('editKekeModal').classList.add('active');}
 function closeEditKekeModal(){document.getElementById('editKekeModal').classList.remove('active');editingKekeId=null;}
-async function saveEditKeke(){if(!editingKekeId)return;const plate=document.getElementById('ek_plate').value.trim().toUpperCase(),driver=document.getElementById('ek_driver').value.trim(),phone=document.getElementById('ek_phone').value.trim();if(!plate||!driver||!phone){toast('Plate, driver name and phone required.','error');return;}const btn=document.getElementById('saveEditKekeBtn');btn.innerHTML='<div class="spinner"></div> Saving...';btn.disabled=true;try{const newPaid=parseFmt(document.getElementById('ek_paid')),newTotal=parseFmt(document.getElementById('ek_total')),newStatus=document.getElementById('ek_status').value;const updates={plate,pt_number:document.getElementById('ek_pt').value.trim(),description:document.getElementById('ek_desc').value.trim(),chassis_number:document.getElementById('ek_chassis').value.trim(),engine_number:document.getElementById('ek_engine').value.trim(),cost:parseFmt(document.getElementById('ek_cost')),total_loan:newTotal,paid:newPaid,status:newStatus,installment_amount:parseFmt(document.getElementById('ek_inst')),schedule:document.getElementById('ek_schedule').value,batch:document.getElementById('ek_batch').value,start_date:document.getElementById('ek_start').value,shorty_name:document.getElementById('ek_shorty').value.trim(),shorty_phone:document.getElementById('ek_shorty_phone').value.trim(),shorty_address:document.getElementById('ek_shorty_address').value.trim(),driver_name:driver,driver_phone:phone,driver_alt_phone:document.getElementById('ek_phone2').value.trim(),driver_address:document.getElementById('ek_address').value.trim(),guarantor_name:document.getElementById('ek_guarantor').value.trim(),guarantor_phone:document.getElementById('ek_gphone').value.trim(),guarantor_relationship:document.getElementById('ek_grel').value,guarantor_address:document.getElementById('ek_gaddress').value.trim(),notes:document.getElementById('ek_notes').value.trim(),completed_at:newStatus==='completed'?new Date().toISOString():null};await dbUpdateKeke(editingKekeId,updates);logActivity(`Edited: ${plate}`,'edit',`Driver: ${driver} | Batch ${updates.batch} | Status: ${newStatus} | By: ${currentUser?.name||'?'}`);toast(`Keke ${plate} updated.`);closeEditKekeModal();closeDetailModal();renderDrivers();}catch(e){toast('Error: '+e.message,'error');}finally{btn.innerHTML='Save Changes';btn.disabled=false;}}
+async function saveEditKeke(){if(!editingKekeId)return;const plate=document.getElementById('ek_plate').value.trim().toUpperCase(),driver=document.getElementById('ek_driver').value.trim(),phone=document.getElementById('ek_phone').value.trim();if(!plate||!driver||!phone){toast('Plate, driver name and phone required.','error');return;}const newCost=parseFmt(document.getElementById('ek_cost')),newInst=parseFmt(document.getElementById('ek_inst'));const newPaid=parseFmt(document.getElementById('ek_paid')),newTotal=parseFmt(document.getElementById('ek_total')),newStatus=document.getElementById('ek_status').value;if(newCost<=0||newTotal<=0||newInst<=0){toast('Cost, Total Loan, and Installment Amount must all be greater than zero.','error');return;}const dupKeke=(await dbGetKekes()).find(k=>k.plate===plate&&k.id!==editingKekeId);if(dupKeke){toast(`Plate ${plate} is already registered to ${dupKeke.driver_name} (${dupKeke.status}).`,'error');return;}const btn=document.getElementById('saveEditKekeBtn');btn.innerHTML='<div class="spinner"></div> Saving...';btn.disabled=true;try{const updates={plate,pt_number:document.getElementById('ek_pt').value.trim(),description:document.getElementById('ek_desc').value.trim(),chassis_number:document.getElementById('ek_chassis').value.trim(),engine_number:document.getElementById('ek_engine').value.trim(),cost:newCost,total_loan:newTotal,paid:newPaid,status:newStatus,installment_amount:newInst,schedule:document.getElementById('ek_schedule').value,batch:document.getElementById('ek_batch').value,start_date:document.getElementById('ek_start').value,shorty_name:document.getElementById('ek_shorty').value.trim(),shorty_phone:document.getElementById('ek_shorty_phone').value.trim(),shorty_address:document.getElementById('ek_shorty_address').value.trim(),driver_name:driver,driver_phone:phone,driver_alt_phone:document.getElementById('ek_phone2').value.trim(),driver_address:document.getElementById('ek_address').value.trim(),guarantor_name:document.getElementById('ek_guarantor').value.trim(),guarantor_phone:document.getElementById('ek_gphone').value.trim(),guarantor_relationship:document.getElementById('ek_grel').value,guarantor_address:document.getElementById('ek_gaddress').value.trim(),notes:document.getElementById('ek_notes').value.trim(),completed_at:newStatus==='completed'?new Date().toISOString():null};await dbUpdateKeke(editingKekeId,updates);logActivity(`Edited: ${plate}`,'edit',`Driver: ${driver} | Batch ${updates.batch} | Status: ${newStatus} | By: ${currentUser?.name||'?'}`);toast(`Keke ${plate} updated.`);closeEditKekeModal();closeDetailModal();renderDrivers();}catch(e){toast('Error: '+e.message,'error');}finally{btn.innerHTML='Save Changes';btn.disabled=false;}}
 async function deleteKeke(){
   if(!isAdmin()){toast('Admin access required.','error');return;}
   if(!editingKekeId)return;
@@ -1856,17 +1919,17 @@ async function openDetail(id){
   const catLabel={payment:'💳 Payment',behaviour:'😤 Behaviour',accident:'🔧 Accident',missing:'❓ Missing',other:'📌 Other'};
   const docs = LOCAL.getDocuments().filter(d=>d.keke_id===id);
   document.getElementById('dmBody').innerHTML=`
-    ${k.status==='completed'?`<div class="completion-banner"><div class="cb-icon">🎉</div><div><h3>Loan Fully Paid!</h3><p>Keke transferred to ${k.driver_name} on ${fmtDateStr(k.completed_at,{day:'numeric',month:'long',year:'numeric'})}.</p></div></div>`:''}
+    ${k.status==='completed'?`<div class="completion-banner"><div class="cb-icon">🎉</div><div><h3>Loan Fully Paid!</h3><p>Keke transferred to ${esc(k.driver_name)} on ${fmtDateStr(k.completed_at,{day:'numeric',month:'long',year:'numeric'})}.</p></div></div>`:''}
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">${statusBadge(k.status)} ${batchBadge(k.batch)} ${isOnBreak(k.batch)?'<span class="badge" style="background:#fef3c7;color:#92400e">⏸️ On Break</span>':''}</div>
     <div class="detail-photos">
       <div class="detail-photo-box">${k.shorty_photo_url?`<img src="${k.shorty_photo_url}" alt="Shorty">`:'<div style="height:100px;display:flex;align-items:center;justify-content:center;font-size:2.5rem;background:var(--gray-100)">🔗</div>'}<div class="dpl">Shorty <button class="detail-photo-edit-btn" onclick="openPhotoUpdateModal('${k.id}','shorty')">📷 Update</button></div></div>
       <div class="detail-photo-box">${k.driver_photo_url?`<img src="${k.driver_photo_url}" alt="Driver">`:'<div style="height:100px;display:flex;align-items:center;justify-content:center;font-size:2.5rem;background:var(--gray-100)">👤</div>'}<div class="dpl">Driver <button class="detail-photo-edit-btn" onclick="openPhotoUpdateModal('${k.id}','driver')">📷 Update</button></div></div>
       <div class="detail-photo-box">${k.guarantor_photo_url?`<img src="${k.guarantor_photo_url}" alt="Guarantor">`:'<div style="height:100px;display:flex;align-items:center;justify-content:center;font-size:2.5rem;background:var(--gray-100)">👤</div>'}<div class="dpl">Guarantor <button class="detail-photo-edit-btn" onclick="openPhotoUpdateModal('${k.id}','guarantor')">📷 Update</button></div></div>
     </div>
-    ${k.shorty_name?`<div class="shorty-box"><div class="lbl">🔗 Shorty (Referrer)</div><div style="font-size:.84rem;line-height:2;color:var(--gray-700)"><strong>Name:</strong> ${k.shorty_name} &nbsp;·&nbsp; <strong>Phone:</strong> <a href="tel:${k.shorty_phone}" style="color:#0369a1">${k.shorty_phone}</a>${k.shorty_address?' &nbsp;·&nbsp; <strong>Address:</strong> '+k.shorty_address:''}</div></div>`:''}
+    ${k.shorty_name?`<div class="shorty-box"><div class="lbl">🔗 Shorty (Referrer)</div><div style="font-size:.84rem;line-height:2;color:var(--gray-700)"><strong>Name:</strong> ${esc(k.shorty_name)} &nbsp;·&nbsp; <strong>Phone:</strong> <a href="tel:${esc(k.shorty_phone)}" style="color:#0369a1">${esc(k.shorty_phone)}</a>${k.shorty_address?' &nbsp;·&nbsp; <strong>Address:</strong> '+esc(k.shorty_address):''}</div></div>`:''}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-      <div style="background:var(--gray-50);border-radius:var(--radius-sm);padding:13px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🛺 Keke Info</div><div style="font-size:.84rem;line-height:2;color:var(--gray-700)"><strong>Plate:</strong> ${k.plate}<br><strong>PT:</strong> ${k.pt_number||'—'}<br><strong>Desc:</strong> ${k.description||'—'}<br><strong>Chassis:</strong> ${k.chassis_number||'—'}<br><strong>Engine:</strong> ${k.engine_number||'—'}<br><strong>Schedule:</strong> ${schedLabel(k.schedule)}<br><strong>Instalment:</strong> ${fmt(k.installment_amount)}<br><strong>Start:</strong> ${k.start_date||'—'}</div></div>
-      <div style="background:var(--gray-50);border-radius:var(--radius-sm);padding:13px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">👤 Driver & Guarantor</div><div style="font-size:.84rem;line-height:2;color:var(--gray-700)"><strong>Driver:</strong> ${k.driver_name}<br><strong>Phone:</strong> <a href="tel:${k.driver_phone}" style="color:var(--green)">${k.driver_phone}</a>${k.driver_alt_phone?' / '+k.driver_alt_phone:''}<br><strong>Address:</strong> ${k.driver_address||'—'}<br><strong>Guarantor:</strong> ${k.guarantor_name||'—'}<br><strong>G.Phone:</strong> ${k.guarantor_phone?`<a href="tel:${k.guarantor_phone}" style="color:var(--green)">${k.guarantor_phone}</a>`:'—'}<br><strong>G.Relation:</strong> ${k.guarantor_relationship||'—'}</div></div>
+      <div style="background:var(--gray-50);border-radius:var(--radius-sm);padding:13px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🛺 Keke Info</div><div style="font-size:.84rem;line-height:2;color:var(--gray-700)"><strong>Plate:</strong> ${esc(k.plate)}<br><strong>PT:</strong> ${esc(k.pt_number)||'—'}<br><strong>Desc:</strong> ${esc(k.description)||'—'}<br><strong>Chassis:</strong> ${esc(k.chassis_number)||'—'}<br><strong>Engine:</strong> ${esc(k.engine_number)||'—'}<br><strong>Schedule:</strong> ${schedLabel(k.schedule)}<br><strong>Instalment:</strong> ${fmt(k.installment_amount)}<br><strong>Start:</strong> ${k.start_date||'—'}</div></div>
+      <div style="background:var(--gray-50);border-radius:var(--radius-sm);padding:13px"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">👤 Driver & Guarantor</div><div style="font-size:.84rem;line-height:2;color:var(--gray-700)"><strong>Driver:</strong> ${esc(k.driver_name)}<br><strong>Phone:</strong> <a href="tel:${esc(k.driver_phone)}" style="color:var(--green)">${esc(k.driver_phone)}</a>${k.driver_alt_phone?' / '+esc(k.driver_alt_phone):''}<br><strong>Address:</strong> ${esc(k.driver_address)||'—'}<br><strong>Guarantor:</strong> ${esc(k.guarantor_name)||'—'}<br><strong>G.Phone:</strong> ${k.guarantor_phone?`<a href="tel:${esc(k.guarantor_phone)}" style="color:var(--green)">${esc(k.guarantor_phone)}</a>`:'—'}<br><strong>G.Relation:</strong> ${esc(k.guarantor_relationship)||'—'}</div></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">
       <div style="text-align:center;padding:12px;background:var(--gray-50);border-radius:var(--radius-sm)"><div style="font-size:.7rem;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Purchase Cost</div><div style="font-weight:800;color:var(--gray-800)">${fmt(k.cost)}</div></div>
@@ -1875,12 +1938,12 @@ async function openDetail(id){
     </div>
     <div class="progress-wrap" style="height:11px"><div class="progress-bar${p<30?' danger':p<70?' warning':''}" style="width:${p}%"></div></div>
     <div class="progress-label"><span>${p}% completed</span><span>${fmt(k.paid)} / ${fmt(k.total_loan)}</span></div>
-    ${k.notes?`<div style="margin-top:12px;font-size:.83rem;color:var(--gray-600);background:var(--gray-50);padding:10px 14px;border-radius:var(--radius-sm)"><strong>Notes:</strong> ${k.notes}</div>`:''}
-    ${k.repossessed_from?`<div style="margin-top:8px;font-size:.82rem;background:#fee2e2;padding:9px 13px;border-radius:var(--radius-sm);color:#991b1b"><strong>⚠️ Repossessed from:</strong> ${k.repossessed_from}</div>`:''}
+    ${k.notes?`<div style="margin-top:12px;font-size:.83rem;color:var(--gray-600);background:var(--gray-50);padding:10px 14px;border-radius:var(--radius-sm)"><strong>Notes:</strong> ${esc(k.notes)}</div>`:''}
+    ${k.repossessed_from?`<div style="margin-top:8px;font-size:.82rem;background:#fee2e2;padding:9px 13px;border-radius:var(--radius-sm);color:#991b1b"><strong>⚠️ Repossessed from:</strong> ${esc(k.repossessed_from)}</div>`:''}
     <div class="section-divider" style="margin:16px 0 10px"><span>📋 Complaints (${complaints.length})</span></div>
-    ${complaints.length?'<div style="display:flex;flex-direction:column;gap:7px">'+complaints.slice(0,3).map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||c.category}</span><span class="comp-date">${fmtDateStr(c.date)}</span></div><div class="comp-text">${c.text}</div></div>`).join('')+(complaints.length>3?`<button class="btn btn-outline btn-sm" onclick="closeDetailModal();openComplaintModal('${k.id}')">View all ${complaints.length} complaints</button>`:'')+'</div>':'<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No complaints recorded.</div>'}
+    ${complaints.length?'<div style="display:flex;flex-direction:column;gap:7px">'+complaints.slice(0,3).map(c=>`<div class="complaint-item ${c.category}"><div class="comp-header"><span class="comp-cat">${catLabel[c.category]||esc(c.category)}</span><span class="comp-date">${fmtDateStr(c.date)}</span></div><div class="comp-text">${esc(c.text)}</div></div>`).join('')+(complaints.length>3?`<button class="btn btn-outline btn-sm" onclick="closeDetailModal();openComplaintModal('${k.id}')">View all ${complaints.length} complaints</button>`:'')+'</div>':'<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No complaints recorded.</div>'}
     <div class="section-divider" style="margin:16px 0 10px"><span>Payment History (${payments.length})</span></div>
-    ${!payments.length?'<div class="empty-state" style="padding:16px 0"><p>No payments yet</p></div>':'<div class="payment-log">'+payments.map(py=>{const hasOver=py.overpay_amount>0;const isZeroM=py.is_short&&Number(py.amount)===0;return`<div class="payment-item"><div><div class="pi-amount${isZeroM?' pay-zero':py.is_short?' pay-short':hasOver?' pay-over':''}">${hasOver?`${fmt(py.expected_amount)}<span class="pay-over-tag">+${fmt(py.overpay_amount)}</span>`:fmt(py.amount)}${py.is_short?' ⚠️':''}</div><div class="pi-note">${py.note||'Payment recorded'}</div></div><div class="pi-date">${fmtDateStr(py.payment_date)}</div></div>`;}).join('')+'</div>'}
+    ${!payments.length?'<div class="empty-state" style="padding:16px 0"><p>No payments yet</p></div>':'<div class="payment-log">'+payments.map(py=>{const hasOver=py.overpay_amount>0;const isZeroM=py.is_short&&Number(py.amount)===0;return`<div class="payment-item"><div><div class="pi-amount${isZeroM?' pay-zero':py.is_short?' pay-short':hasOver?' pay-over':''}">${hasOver?`${fmt(py.expected_amount)}<span class="pay-over-tag">+${fmt(py.overpay_amount)}</span>`:fmt(py.amount)}${py.is_short?' ⚠️':''}</div><div class="pi-note">${esc(py.note)||'Payment recorded'}</div></div><div class="pi-date">${fmtDateStr(py.payment_date)}</div></div>`;}).join('')+'</div>'}
     <div class="section-divider" style="margin:16px 0 10px"><span>📁 Keke Documents (${docs.length})</span><button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="openDocumentsModal('${k.id}')">➕ Add Document</button></div>
     <div id="dmDocList">${renderDocList(docs, k.id)}</div>`;
   document.getElementById('detailModal').classList.add('active');
@@ -1890,7 +1953,7 @@ function closeDetailModal(){document.getElementById('detailModal').classList.rem
 function renderDocList(docs, kekeId) {
   if(!docs.length) return '<div style="font-size:.83rem;color:var(--gray-500);padding:8px 0">No documents uploaded yet. Click ➕ Add Document above to upload keke papers, permits, IDs etc.</div>';
   const typeIcon = t => /jpg|jpeg|png|gif|webp/.test(t||'')?'🖼️':t==='pdf'||t?.includes('pdf')?'📄':t?.includes('doc')?'📝':'📎';
-  return '<div class="doc-list">'+docs.map(d=>`<div class="doc-item"><div class="doc-icon">${typeIcon(d.type||d.name)}</div><div class="doc-info"><div class="doc-name">${d.name||'Document'}</div><div class="doc-meta">${d.type||''} · Uploaded ${fmtDateStr(d.uploaded_at)} by ${d.uploaded_by||'?'}</div></div><div class="doc-actions"><a href="${d.dataUrl||d.data_url}" download="${d.name||'document'}" class="btn btn-primary btn-sm" style="text-decoration:none">⬇️</a>${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocAndRefresh('${d.id}','${kekeId}')">✕</button>`:''}</div></div>`).join('')+'</div>';
+  return '<div class="doc-list">'+docs.map(d=>`<div class="doc-item"><div class="doc-icon">${typeIcon(d.type||d.name)}</div><div class="doc-info"><div class="doc-name">${esc(d.name)||'Document'}</div><div class="doc-meta">${esc(d.type)||''} · Uploaded ${fmtDateStr(d.uploaded_at)} by ${esc(d.uploaded_by)||'?'}</div></div><div class="doc-actions"><a href="${d.dataUrl||d.data_url}" download="${esc(d.name)||'document'}" class="btn btn-primary btn-sm" style="text-decoration:none">⬇️</a>${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocAndRefresh('${d.id}','${kekeId}')">✕</button>`:''}</div></div>`).join('')+'</div>';
 }
 function deleteDocAndRefresh(docId, kekeId) {
   if(!isAdmin()){toast('Admin access required.','error');return;}
@@ -1918,7 +1981,7 @@ function renderActivityLog(){
   if(!logs.length){container.innerHTML='<div class="empty-state"><p>No activity recorded yet.</p></div>';return;}
   const typeIcon={payment:'💳',register:'🛺',edit:'✏️',delete:'🗑️',complaint:'📋'};
   const borderColor={payment:'var(--green)',register:'#3b82f6',edit:'#f59e0b',delete:'var(--red)',complaint:'#7c3aed'};
-  container.innerHTML='<div style="display:flex;flex-direction:column;gap:7px">'+logs.map(l=>{const d=new Date(l.timestamp),timeStr=d.toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})+' '+d.toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'});return`<div style="display:flex;align-items:center;gap:12px;padding:11px 14px;background:var(--gray-50);border-radius:var(--radius-sm);border-left:3px solid ${borderColor[l.type]||'var(--gray-300)'}"><div style="font-size:1.1rem;flex-shrink:0">${typeIcon[l.type]||'📋'}</div><div style="flex:1;min-width:0"><div style="font-size:.86rem;font-weight:600;color:var(--gray-800)">${l.action}</div><div style="font-size:.76rem;color:var(--gray-500);margin-top:1px">${l.detail}</div></div><span style="font-size:.72rem;color:var(--gray-400);flex-shrink:0">${timeStr}</span></div>`;}).join('')+'</div>';
+  container.innerHTML='<div style="display:flex;flex-direction:column;gap:7px">'+logs.map(l=>{const d=new Date(l.timestamp),timeStr=d.toLocaleDateString('en-NG',{day:'numeric',month:'short',year:'numeric'})+' '+d.toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'});return`<div style="display:flex;align-items:center;gap:12px;padding:11px 14px;background:var(--gray-50);border-radius:var(--radius-sm);border-left:3px solid ${borderColor[l.type]||'var(--gray-300)'}"><div style="font-size:1.1rem;flex-shrink:0">${typeIcon[l.type]||'📋'}</div><div style="flex:1;min-width:0"><div style="font-size:.86rem;font-weight:600;color:var(--gray-800)">${esc(l.action)}</div><div style="font-size:.76rem;color:var(--gray-500);margin-top:1px">${esc(l.detail)}</div></div><span style="font-size:.72rem;color:var(--gray-400);flex-shrink:0">${timeStr}</span></div>`;}).join('')+'</div>';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1952,7 +2015,7 @@ async function downloadAllPaymentsPDF(){
   const totalAmt=payments.reduce((s,p)=>s+Number(p.amount),0),drivers=new Set(payments.map(p=>p.driver_name)).size;
   const dateStr=fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const rangeNote=(from||to)?`${from||'start'} → ${to||'today'}`:'All Time';
-  const rows=payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td><strong>${p.driver_name}</strong></td><td>${p.plate}</td><td>${p.batch?'Batch '+p.batch:''}</td><td class="${p.is_short&&Number(p.amount)===0?'am-zero':p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join('');
+  const rows=payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td><strong>${esc(p.driver_name)}</strong></td><td>${esc(p.plate)}</td><td>${p.batch?'Batch '+esc(p.batch):''}</td><td class="${p.is_short&&Number(p.amount)===0?'am-zero':p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${esc(p.note)||'—'}</td></tr>`).join('');
   const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Payment Records</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Generated: ${dateStr}</div></div><div class="hdr-r">${payments.length} records<br><strong style="color:#1a7a3c;font-size:1rem">${fmt(totalAmt)}</strong></div></div>${(from||to)?`<div class="filter-note">📅 Period: <strong>${rangeNote}</strong></div>`:''}<div class="stats"><div class="stat"><div class="lbl">Records</div><div class="val">${payments.length}</div></div><div class="stat"><div class="lbl">Total Collected</div><div class="val g">${fmt(totalAmt)}</div></div><div class="stat"><div class="lbl">Drivers</div><div class="val">${drivers}</div></div></div><table><thead><tr><th>Date</th><th>Driver</th><th>Plate</th><th>Batch</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
   openPDF(html,'Payment Records — Maymoon Mainstream Ltd');
 }
@@ -1968,9 +2031,9 @@ async function buildDriverPaymentStatementPDF(kekeId, from, to){
   const periodTotal=payments.reduce((s,p)=>s+Number(p.amount),0),bal=k.total_loan-k.paid;
   const dateStr=fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const rangeNote=(from||to)?`${from||'start'} → ${to||'today'}`:'All Time';
-  const rows=payments.length?payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td class="${p.is_short&&Number(p.amount)===0?'am-zero':p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${p.note||'—'}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;padding:20px;color:#adb5bd">No payments in selected date range</td></tr>';
-  const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Driver Payment Statement</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Period: ${rangeNote} · Generated: ${dateStr}</div></div><div class="hdr-r">PT: <strong>${k.pt_number||'—'}</strong><br>Batch ${k.batch||'—'}</div></div><div class="info-grid"><div><strong>Driver:</strong> ${k.driver_name}</div><div><strong>Phone:</strong> ${k.driver_phone}${k.driver_alt_phone?' / '+k.driver_alt_phone:''}</div><div><strong>Guarantor:</strong> ${k.guarantor_name||'—'}</div><div><strong>Guarantor Phone:</strong> ${k.guarantor_phone||'—'}</div><div><strong>Address:</strong> ${k.driver_address||'—'}</div><div><strong>Schedule:</strong> ${schedLabel(k.schedule)} — ${fmt(k.installment_amount)}</div></div><div class="stats"><div class="stat"><div class="lbl">Total Loan</div><div class="val">${fmt(k.total_loan)}</div></div><div class="stat"><div class="lbl">Paid (all time)</div><div class="val g">${fmt(k.paid)}</div></div><div class="stat"><div class="lbl">Balance</div><div class="val ${bal<=0?'g':'r'}">${bal<=0?'CLEARED':fmt(bal)}</div></div></div>${(from||to)?`<div class="filter-note">📅 ${rangeNote} — ${payments.length} record(s), ${fmt(periodTotal)}</div>`:''}<table><thead><tr><th>Date</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
-  openPDF(html,`Statement — ${k.driver_name} (PT: ${k.pt_number||'—'})`);
+  const rows=payments.length?payments.map(p=>`<tr><td>${fmtDateStr(p.payment_date)}</td><td class="${p.is_short&&Number(p.amount)===0?'am-zero':p.is_short?'am-short':'am'}">${fmt(p.amount)}${p.is_short?' ⚠️':''}</td><td class="${p.balance_after<=0?'clr':'bal'}">${p.balance_after<=0?'CLEARED ✓':fmt(p.balance_after)}</td><td>${esc(p.note)||'—'}</td></tr>`).join(''):'<tr><td colspan="4" style="text-align:center;padding:20px;color:#adb5bd">No payments in selected date range</td></tr>';
+  const html=`<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Driver Payment Statement</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">Period: ${rangeNote} · Generated: ${dateStr}</div></div><div class="hdr-r">PT: <strong>${esc(k.pt_number)||'—'}</strong><br>Batch ${esc(k.batch)||'—'}</div></div><div class="info-grid"><div><strong>Driver:</strong> ${esc(k.driver_name)}</div><div><strong>Phone:</strong> ${esc(k.driver_phone)}${k.driver_alt_phone?' / '+esc(k.driver_alt_phone):''}</div><div><strong>Guarantor:</strong> ${esc(k.guarantor_name)||'—'}</div><div><strong>Guarantor Phone:</strong> ${esc(k.guarantor_phone)||'—'}</div><div><strong>Address:</strong> ${esc(k.driver_address)||'—'}</div><div><strong>Schedule:</strong> ${schedLabel(k.schedule)} — ${fmt(k.installment_amount)}</div></div><div class="stats"><div class="stat"><div class="lbl">Total Loan</div><div class="val">${fmt(k.total_loan)}</div></div><div class="stat"><div class="lbl">Paid (all time)</div><div class="val g">${fmt(k.paid)}</div></div><div class="stat"><div class="lbl">Balance</div><div class="val ${bal<=0?'g':'r'}">${bal<=0?'CLEARED':fmt(bal)}</div></div></div>${(from||to)?`<div class="filter-note">📅 ${rangeNote} — ${payments.length} record(s), ${fmt(periodTotal)}</div>`:''}<table><thead><tr><th>Date</th><th>Amount</th><th>Balance After</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd</span><span>${dateStr}</span></div>`;
+  openPDF(html,`Statement — ${esc(k.driver_name)} (PT: ${esc(k.pt_number)||'—'})`);
 }
 async function downloadDriverPDF(){
   if(!currentDetailKekeId){toast('No driver selected.','error');return;}
@@ -2045,7 +2108,7 @@ function renderBatchPaymentAlerts() {
           ${unpaid.map(k=>`<div class="bpa-driver${isPast4pm?' bpa-overdue':''}">
             <div style="display:flex;align-items:center;gap:8px;flex:1">
               ${k.driver_photo_url?`<img src="${k.driver_photo_url}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0">`:'<div style="width:28px;height:28px;border-radius:50%;background:var(--gray-200);display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">👤</div>'}
-              <div><div style="font-weight:700;font-size:.86rem">${k.driver_name}</div><div style="font-size:.74rem;color:${isPast4pm?'var(--red)':'var(--gray-500)'}">${k.pt_number||k.plate} &bull; 📞 ${k.driver_phone}</div></div>
+              <div><div style="font-weight:700;font-size:.86rem">${esc(k.driver_name)}</div><div style="font-size:.74rem;color:${isPast4pm?'var(--red)':'var(--gray-500)'}">${esc(k.pt_number||k.plate)} &bull; 📞 ${esc(k.driver_phone)}</div></div>
             </div>
             <button class="btn btn-primary btn-sm" style="flex-shrink:0" onclick="openPaymentModal('${k.id}')">💳 Pay</button>
           </div>`).join('')}
@@ -2053,7 +2116,7 @@ function renderBatchPaymentAlerts() {
       </div>`:''}
       ${paid.length?`<div style="margin-top:10px"><div style="font-size:.74rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">✅ Paid Today (${paid.length}):</div>
         <div style="display:flex;flex-direction:column;gap:5px">
-          ${paid.map(k=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--green-bg);border-radius:var(--radius-sm);font-size:.83rem"><span style="color:var(--green)">✓</span> ${k.driver_name} &bull; ${k.pt_number||k.plate}</div>`).join('')}
+          ${paid.map(k=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--green-bg);border-radius:var(--radius-sm);font-size:.83rem"><span style="color:var(--green)">✓</span> ${esc(k.driver_name)} &bull; ${esc(k.pt_number||k.plate)}</div>`).join('')}
         </div>
       </div>`:''}
     </div>`;
@@ -2124,15 +2187,15 @@ async function renderMaintenance() {
     const records=LOCAL.getServiceRecords().filter(r=>r.keke_id===k.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
     return `<div class="maint-card ${overdue?'maint-overdue':''}">
       <div class="maint-header">
-        <div><div class="maint-plate">🛺 PT: ${k.pt_number||'—'}</div><div class="maint-driver">${k.driver_name} ${batchBadge(k.batch)}</div></div>
+        <div><div class="maint-plate">🛺 PT: ${esc(k.pt_number)||'—'}</div><div class="maint-driver">${esc(k.driver_name)} ${batchBadge(k.batch)}</div></div>
         ${overdue?'<span class="badge badge-red">🔧 Service Overdue</span>':'<span class="badge badge-green">✅ Up to Date</span>'}
       </div>
       <div class="maint-status-row">
         ${svc.lastDate?`<span>Last service: <strong>${fmtDateStr(svc.lastDate)}</strong></span><span>${svc.daysSince} days ago</span>`:
         `<span style="color:var(--red)">⚠️ Never serviced</span>`}
       </div>
-      ${svc.lastCondition?`<div style="margin-top:6px;font-size:.8rem">Last condition: <strong>${condLabel[svc.lastCondition]||svc.lastCondition}</strong></div>`:''}
-      ${records.slice(0,2).map(r=>`<div class="maint-record"><span class="maint-rec-date">${fmtDateStr(r.date,{day:'numeric',month:'short'})}</span><span>${condLabel[r.condition]||r.condition}</span><span>${r.serviced==='yes'?'✅ Serviced':'❌ Not serviced'}</span>${r.notes?`<span style="color:var(--gray-500);font-size:.77rem;grid-column:1/-1">${r.notes}</span>`:''}</div>`).join('')}
+      ${svc.lastCondition?`<div style="margin-top:6px;font-size:.8rem">Last condition: <strong>${condLabel[svc.lastCondition]||esc(svc.lastCondition)}</strong></div>`:''}
+      ${records.slice(0,2).map(r=>`<div class="maint-record"><span class="maint-rec-date">${fmtDateStr(r.date,{day:'numeric',month:'short'})}</span><span>${condLabel[r.condition]||esc(r.condition)}</span><span>${r.serviced==='yes'?'✅ Serviced':'❌ Not serviced'}</span>${r.notes?`<span style="color:var(--gray-500);font-size:.77rem;grid-column:1/-1">${esc(r.notes)}</span>`:''}</div>`).join('')}
       <div class="maint-footer">
         <button class="btn btn-primary btn-sm" onclick="openServiceModal('${k.id}')">🔧 Log Service</button>
         <button class="btn btn-outline btn-sm" onclick="openServiceModalAndDownload('${k.id}')">⬇️ History PDF</button>
@@ -2147,7 +2210,7 @@ function openServiceModal(kekeId) {
   currentServiceKekeId = kekeId;
   const k = LOCAL.getKekes().find(x=>x.id===kekeId); if(!k) return;
   document.getElementById('serviceModalTitle').textContent = `🔧 Service Log — ${k.driver_name} (PT: ${k.pt_number||'—'})`;
-  document.getElementById('serviceKekeInfo').innerHTML = `<svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><p>PT: <strong>${k.pt_number||'—'}</strong> · Driver: <strong>${k.driver_name}</strong> · ${batchBadge(k.batch)} · Service expected every <strong>3 weeks</strong>.</p>`;
+  document.getElementById('serviceKekeInfo').innerHTML = `<svg viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg><p>PT: <strong>${esc(k.pt_number)||'—'}</strong> · Driver: <strong>${esc(k.driver_name)}</strong> · ${batchBadge(k.batch)} · Service expected every <strong>3 weeks</strong>.</p>`;
   document.getElementById('svc_date').value=getTodayStr();
   document.getElementById('svc_condition').value = 'good';
   document.getElementById('svc_done').value = 'yes';
@@ -2171,9 +2234,9 @@ function renderServiceHistory() {
   container.innerHTML=`<div style="font-size:.76rem;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">${records.length} Service Record(s)</div>`+
     records.map(r=>`<div class="maint-history-item">
       <div class="mhi-row"><strong>${fmtDateStr(r.date,{day:'numeric',month:'long',year:'numeric'})}</strong><span class="${r.serviced==='yes'?'mhi-badge-green':'mhi-badge-red'}">${r.serviced==='yes'?'✅ Serviced':'❌ Not Serviced'}</span></div>
-      <div class="mhi-row"><span>Condition: <strong>${condLabel[r.condition]||r.condition}</strong></span>${r.mechanic?`<span>👨‍🔧 ${r.mechanic}</span>`:''}</div>
-      ${r.notes?`<div style="font-size:.8rem;color:var(--gray-600);margin-top:4px">📝 ${r.notes}</div>`:''}
-      ${r.recorded_by?`<div style="font-size:.71rem;color:var(--gray-400);margin-top:3px">By: ${r.recorded_by}</div>`:''}
+      <div class="mhi-row"><span>Condition: <strong>${condLabel[r.condition]||esc(r.condition)}</strong></span>${r.mechanic?`<span>👨‍🔧 ${esc(r.mechanic)}</span>`:''}</div>
+      ${r.notes?`<div style="font-size:.8rem;color:var(--gray-600);margin-top:4px">📝 ${esc(r.notes)}</div>`:''}
+      ${r.recorded_by?`<div style="font-size:.71rem;color:var(--gray-400);margin-top:3px">By: ${esc(r.recorded_by)}</div>`:''}
       ${isAdmin()?`<button class="comp-del" onclick="deleteServiceRecord('${r.id}')" style="margin-top:4px">✕ Delete</button>`:''}
     </div>`).join('');
 }
@@ -2215,10 +2278,10 @@ function downloadServiceHistoryPDF() {
   const dateStr = fmtDateStr(getTodayStr(),{day:'numeric',month:'long',year:'numeric'});
   const condLabel={good:'✅ Good',fair:'⚠️ Fair',poor:'🔴 Poor'};
   const rows = records.length
-    ? records.map(r=>`<tr><td>${fmtDateStr(r.date)}</td><td class="${r.serviced==='yes'?'am':'am-short'}">${r.serviced==='yes'?'✅ Serviced':'❌ Not Serviced'}</td><td>${condLabel[r.condition]||r.condition}</td><td>${r.mechanic||'—'}</td><td>${r.notes||'—'}</td><td style="font-size:.75em;color:#adb5bd">${r.recorded_by||'?'}</td></tr>`).join('')
+    ? records.map(r=>`<tr><td>${fmtDateStr(r.date)}</td><td class="${r.serviced==='yes'?'am':'am-short'}">${r.serviced==='yes'?'✅ Serviced':'❌ Not Serviced'}</td><td>${condLabel[r.condition]||esc(r.condition)}</td><td>${esc(r.mechanic)||'—'}</td><td>${esc(r.notes)||'—'}</td><td style="font-size:.75em;color:#adb5bd">${esc(r.recorded_by)||'?'}</td></tr>`).join('')
     : '<tr><td colspan="6" style="text-align:center;padding:20px;color:#adb5bd">No service records yet</td></tr>';
-  const html = `<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Service &amp; Maintenance History</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">PT: ${k.pt_number||'—'} &nbsp;·&nbsp; Driver: ${k.driver_name} &nbsp;·&nbsp; Batch ${k.batch||'—'}</div></div><div class="hdr-r">${records.length} record(s)<br><span style="font-size:.75rem;color:#6c757d">Every 3 weeks</span></div></div><div class="stats"><div class="stat"><div class="lbl">Total Records</div><div class="val">${records.length}</div></div><div class="stat"><div class="lbl">Serviced</div><div class="val g">${records.filter(r=>r.serviced==='yes').length}</div></div><div class="stat"><div class="lbl">Not Serviced</div><div class="val r">${records.filter(r=>r.serviced==='no').length}</div></div></div><table><thead><tr><th>Date</th><th>Status</th><th>Condition</th><th>Mechanic</th><th>Notes</th><th>Recorded By</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd · Service Records for PT ${k.pt_number||'—'}</span><span>${dateStr}</span></div>`;
-  openPDF(html, `Service History — PT ${k.pt_number||'—'} (${k.driver_name})`);
+  const html = `<div class="hdr"><div><div class="co">Maymoon Mainstream Ltd</div><h1>Service &amp; Maintenance History</h1><div style="font-size:.8rem;color:#6c757d;margin-top:3px">PT: ${esc(k.pt_number)||'—'} &nbsp;·&nbsp; Driver: ${esc(k.driver_name)} &nbsp;·&nbsp; Batch ${esc(k.batch)||'—'}</div></div><div class="hdr-r">${records.length} record(s)<br><span style="font-size:.75rem;color:#6c757d">Every 3 weeks</span></div></div><div class="stats"><div class="stat"><div class="lbl">Total Records</div><div class="val">${records.length}</div></div><div class="stat"><div class="lbl">Serviced</div><div class="val g">${records.filter(r=>r.serviced==='yes').length}</div></div><div class="stat"><div class="lbl">Not Serviced</div><div class="val r">${records.filter(r=>r.serviced==='no').length}</div></div></div><table><thead><tr><th>Date</th><th>Status</th><th>Condition</th><th>Mechanic</th><th>Notes</th><th>Recorded By</th></tr></thead><tbody>${rows}</tbody></table><div class="ftr"><span>Maymoon Mainstream Ltd · Service Records for PT ${esc(k.pt_number)||'—'}</span><span>${dateStr}</span></div>`;
+  openPDF(html, `Service History — PT ${esc(k.pt_number)||'—'} (${esc(k.driver_name)})`);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2246,11 +2309,11 @@ function renderDocumentsList() {
     return `<div class="doc-item">
       <div class="doc-icon">${icon}</div>
       <div class="doc-info">
-        <div class="doc-name">${d.name||'Document'}</div>
-        <div class="doc-meta">${d.type||''} &bull; Uploaded: ${fmtDateStr(d.uploaded_at)} &bull; By: ${d.uploaded_by||'?'}</div>
+        <div class="doc-name">${esc(d.name)||'Document'}</div>
+        <div class="doc-meta">${esc(d.type)||''} &bull; Uploaded: ${fmtDateStr(d.uploaded_at)} &bull; By: ${esc(d.uploaded_by)||'?'}</div>
       </div>
       <div class="doc-actions">
-        ${d.dataUrl?`<a href="${d.dataUrl}" download="${d.name||'document'}" class="btn btn-outline btn-sm" style="text-decoration:none">⬇️ Download</a>`:''}
+        ${d.dataUrl?`<a href="${d.dataUrl}" download="${esc(d.name)||'document'}" class="btn btn-outline btn-sm" style="text-decoration:none">⬇️ Download</a>`:''}
         ${isAdmin()?`<button class="btn btn-danger btn-sm" onclick="deleteDocument('${d.id}')">🗑️</button>`:''}
       </div>
     </div>`;
@@ -2389,8 +2452,10 @@ async function saveUpdatedPhoto() {
   if(!dataUrl){
     const input=document.getElementById('photoUpdateInput');
     if(!input.files[0]){toast('Please select or snap a photo first.','error');return;}
+    if(input.files[0].size>15*1024*1024){toast('Photo is too large (max 15MB). Please choose a smaller image.','error');return;}
     dataUrl=await new Promise(res=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(input.files[0]);});
   }
+  dataUrl=await compressImage(dataUrl);
   const fieldMap={driver:'driver_photo_url',shorty:'shorty_photo_url',guarantor:'guarantor_photo_url'};
   const upd={};upd[fieldMap[photoUpdateType]]=dataUrl;
   await dbUpdateKeke(photoUpdateKekeId,upd);
