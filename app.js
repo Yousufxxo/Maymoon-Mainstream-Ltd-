@@ -8,6 +8,7 @@ let currentUser = null;
 const ROLE_MAP = {
   'maimuna@maymoon.com': { name: 'Maimuna Aliyu', role: 'admin' },
   'staff@maymoon.com':   { name: 'Staff',         role: 'staff' },
+  'dauda@maymoon.com':   { name: 'Dauda',         role: 'service' },
 };
 
 // isAdmin() re-derives the role fresh from ROLE_MAP by email every time,
@@ -21,6 +22,22 @@ function isAdmin() {
   if (!currentUser || !currentUser.email) return false;
   const roleInfo = ROLE_MAP[currentUser.email.toLowerCase()];
   return !!roleInfo && roleInfo.role === 'admin';
+}
+
+// isService() — service & maintenance staff. Same fresh-from-ROLE_MAP lookup as
+// isAdmin(), so editing localStorage can't promote or change a role.
+function isService() {
+  if (!currentUser || !currentUser.email) return false;
+  const roleInfo = ROLE_MAP[currentUser.email.toLowerCase()];
+  return !!roleInfo && roleInfo.role === 'service';
+}
+
+// The first screen each role should land on after signing in
+function defaultView() { return isService() ? 'maintenance' : 'dashboard'; }
+
+// Service users never see the dashboard, even briefly while data loads
+function hideAllViewsForService() {
+  if (isService()) document.querySelectorAll('.content').forEach(el => el.style.display = 'none');
 }
 
 // ─── Total Outstanding show/hide (protected by a hardcoded password) ───
@@ -82,10 +99,11 @@ async function doLogin() {
     document.getElementById('loginPage').style.display = 'none';
     document.getElementById('app').classList.add('active');
     applyRoleUI();
+    hideAllViewsForService();
     // Bootstrap AFTER login so all Supabase requests use the user JWT
     _bootstrapped = false; // force fresh load with authenticated token
     await bootstrap();
-    showView('dashboard');
+    showView(defaultView());
     startProactiveTokenRefresh();
   } catch (e) {
     errEl.style.display = 'block';
@@ -112,26 +130,53 @@ function doLogout() {
 
 // Staff-allowed views only
 const STAFF_VIEWS = ['dashboard','addKeke','drivers','alerts','payments','completed'];
+// Service & maintenance staff: the maintenance section and nothing else
+const SERVICE_VIEWS = ['maintenance'];
 
 function applyRoleUI() {
   if (!currentUser) return;
   const $ = id => document.getElementById(id);
+  const show = (id, on) => { const el=$(id); if(el) el.style.display = on ? '' : 'none'; };
+  const service = isService();
   if ($('sidebarAvatar')) $('sidebarAvatar').textContent = currentUser.name.charAt(0).toUpperCase();
   if ($('sidebarName'))   $('sidebarName').textContent   = currentUser.name;
-  if ($('sidebarRole'))   $('sidebarRole').textContent   = isAdmin() ? 'Administrator' : 'Staff';
+  if ($('sidebarRole'))   $('sidebarRole').textContent   = isAdmin() ? 'Administrator' : service ? 'Service & Maintenance' : 'Staff';
   const badge = $('roleBadge');
-  if (badge) { badge.textContent = isAdmin() ? '🔑 Admin' : '👤 Staff'; badge.className = isAdmin() ? 'badge badge-red' : 'badge badge-gray'; badge.style.display = ''; }
+  if (badge) {
+    badge.textContent = isAdmin() ? '🔑 Admin' : service ? '🔧 Service' : '👤 Staff';
+    badge.className = isAdmin() ? 'badge badge-red' : 'badge badge-gray';
+    badge.style.display = '';
+  }
+
+  // Service users have no use for global search (it opens full driver/loan details)
+  const searchWrap = document.querySelector('.global-search-wrap');
+  if (searchWrap) searchWrap.parentElement.style.display = service ? 'none' : 'flex';
+
+  if (service) {
+    // Only the Service & Maintenance link stays in the sidebar
+    show('nav-section-main', false);
+    show('nav-section-analytics', false);
+    show('nav-section-settings', true);
+    ['nav-holiday','nav-backup','nav-activityLog'].forEach(id => show(id, false));
+    show('nav-maintenance', true);
+    if ($('nav-label-settings')) $('nav-label-settings').textContent = 'Service';
+    return;
+  }
+
+  // Admin / staff: make sure nothing a service user had hidden stays hidden
+  show('nav-section-main', true);
+  ['nav-holiday','nav-backup','nav-activityLog'].forEach(id => show(id, true));
+  if ($('nav-label-settings')) $('nav-label-settings').textContent = 'Settings';
 
   if (isAdmin()) {
-    // Show everything for admin
-    ['nav-activityLog','nav-section-analytics','nav-section-settings'].forEach(id => { const el=$(id); if(el) el.style.display=''; });
+    ['nav-activityLog','nav-section-analytics','nav-section-settings'].forEach(id => show(id, true));
     if ($('payActionsHeader')) $('payActionsHeader').style.display = '';
-    ['stat-card-total-keke','stat-card-active','stat-card-completed'].forEach(id=>{ const el=$(id); if(el) el.style.display=''; });
+    ['stat-card-total-keke','stat-card-active','stat-card-completed'].forEach(id => show(id, true));
   } else {
     // Staff: hide Analytics, Settings, Activity Log, Actions column, and 3 admin-only stat cards
-    ['nav-section-analytics','nav-section-settings','nav-activityLog'].forEach(id => { const el=$(id); if(el) el.style.display='none'; });
+    ['nav-section-analytics','nav-section-settings','nav-activityLog'].forEach(id => show(id, false));
     if ($('payActionsHeader')) $('payActionsHeader').style.display = 'none';
-    ['stat-card-total-keke','stat-card-active','stat-card-completed'].forEach(id=>{ const el=$(id); if(el) el.style.display='none'; });
+    ['stat-card-total-keke','stat-card-active','stat-card-completed'].forEach(id => show(id, false));
   }
 }
 
@@ -489,6 +534,25 @@ async function bootstrap() {
   if (_bootstrapped) return;
   setSyncStatus('syncing');
   try {
+    // Service & maintenance users only need keke + service records. Don't pull
+    // payments, complaints, documents, logs or settings into their browser.
+    if (isService()) {
+      const [kekes, svcRecs] = await Promise.all([
+        sb.select('keke_loans', 'order=created_at.desc'),
+        sb.select('keke_service_records', 'order=created_at.desc'),
+      ]);
+      CACHE.kekes          = kekes.map(_mapKeke);
+      CACHE.payments       = [];
+      CACHE.complaints     = [];
+      CACHE.serviceRecords = svcRecs;
+      CACHE.documents      = [];
+      CACHE.activityLog    = [];
+      CACHE.holiday        = { A:{}, B:{}, C:{} };
+      CACHE.batchSchedules = { A:{startDate:''}, B:{startDate:''}, C:{startDate:''} };
+      _bootstrapped = true;
+      setSyncStatus('synced');
+      return;
+    }
     const [kekes, payments, complaints, svcRecs, docs, logs, holiday, bsched] = await Promise.all([
       sb.select('keke_loans', 'order=created_at.desc'),
       sb.selectAll('keke_payments', 'order=payment_date.desc'),
@@ -587,7 +651,7 @@ function refreshDriverViews(kekeId) {
 // ─── Supabase helpers for complaints, service, docs, activity ─
 async function _sbSaveComplaint(c) { try { setSyncStatus('syncing'); await sb.insert('keke_complaints',c); CACHE.complaints.unshift(c); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
 async function _sbDeleteComplaint(id) { try { setSyncStatus('syncing'); await sb.delete('keke_complaints',`id=eq.${id}`); CACHE.complaints=CACHE.complaints.filter(c=>c.id!==id); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
-async function _sbSaveServiceRecord(r) { try { setSyncStatus('syncing'); await sb.insert('keke_service_records',r); CACHE.serviceRecords.unshift(r); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
+async function _sbSaveServiceRecord(r) { try { setSyncStatus('syncing'); await sb.insert('keke_service_records',r); setSyncStatus('synced'); return true; } catch(e){ setSyncStatus('error'); console.error(e); return false; } }
 async function _sbDeleteServiceRecord(id) { try { setSyncStatus('syncing'); await sb.delete('keke_service_records',`id=eq.${id}`); CACHE.serviceRecords=CACHE.serviceRecords.filter(r=>r.id!==id); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
 async function _sbSaveDocument(doc) { try { setSyncStatus('syncing'); const row={...doc, data_url:doc.dataUrl||doc.data_url}; delete row.dataUrl; await sb.insert('keke_documents',row); CACHE.documents.unshift(row); setSyncStatus('synced'); } catch(e){ setSyncStatus('error'); console.error(e); } }
 // Bootstrap intentionally excludes each document's file content (see the
@@ -907,7 +971,11 @@ function getPeriodDates(period) {
 const viewTitles = {dashboard:'Dashboard',addKeke:'Register New Keke',drivers:'All Drivers & Kekes',alerts:'Payment Alerts',payments:'Payment Log',completed:'Completed Loans',reports:'Reports & Analytics',shorties:'Shorty Manager',holiday:'Holiday / Break',maintenance:'Service & Maintenance',backup:'Backup & Restore',activityLog:'Activity Log'};
 function showView(v) {
   // Block staff from restricted views
-  if (!isAdmin() && !STAFF_VIEWS.includes(v)) {
+  if (isService() && !SERVICE_VIEWS.includes(v)) {
+    toast('Access restricted. Contact admin.', 'error');
+    return;
+  }
+  if (!isAdmin() && !isService() && !STAFF_VIEWS.includes(v)) {
     toast('Access restricted. Contact admin.', 'error');
     return;
   }
@@ -2264,23 +2332,60 @@ function renderServiceHistory() {
     </div>`).join('');
 }
 
-function saveServiceRecord() {
-  const date = document.getElementById('svc_date').value;
-  const condition = document.getElementById('svc_condition').value;
-  const serviced = document.getElementById('svc_done').value;
-  const mechanic = document.getElementById('svc_mechanic').value.trim();
-  const notes = document.getElementById('svc_notes').value.trim();
-  if(!date){toast('Service date required.','error');return;}
-  const svcEntry={id:uid(),keke_id:currentServiceKekeId,date,condition,serviced,mechanic,notes,recorded_by:currentUser?.name||'?',created_at:new Date().toISOString()};
-  _sbSaveServiceRecord(svcEntry);
-  const k = LOCAL.getKekes().find(x=>x.id===currentServiceKekeId);
-  logActivity(`Service logged: ${k?.plate||''}`, 'edit', `Driver: ${k?.driver_name||''} | Condition: ${condition} | Serviced: ${serviced} | By: ${currentUser?.name||'?'}`);
-  document.getElementById('svc_date').value=getTodayStr();
-  document.getElementById('svc_notes').value = '';
-  document.getElementById('svc_mechanic').value = '';
-  renderServiceHistory();
-  renderMaintenance();
-  toast('Service record saved!');
+// Duplicate-service guard (mirrors the payment guard): blocks a new record for the
+// same keke / date / condition / serviced-status / mechanic / notes. Change any one of
+// them to log a genuinely separate service. Checks ALL of that keke's loaded records,
+// not just ones from this session, so an accidental re-entry later is still caught.
+function findDuplicateServiceRecord(kekeId,date,condition,serviced,mechanic,notes){
+  const norm=s=>(s||'').trim().toLowerCase();
+  return (CACHE.serviceRecords||[]).find(r=>
+    r.keke_id===kekeId &&
+    r.date===date &&
+    r.condition===condition &&
+    r.serviced===serviced &&
+    norm(r.mechanic)===norm(mechanic) &&
+    norm(r.notes)===norm(notes)
+  );
+}
+let _savingService = false;
+async function saveServiceRecord() {
+  if (_savingService) return; // prevent double-click
+  _savingService = true;
+  try {
+    const date = document.getElementById('svc_date').value;
+    const condition = document.getElementById('svc_condition').value;
+    const serviced = document.getElementById('svc_done').value;
+    const mechanic = document.getElementById('svc_mechanic').value.trim();
+    const notes = document.getElementById('svc_notes').value.trim();
+    if(!date){toast('Service date required.','error');return;}
+    if(findDuplicateServiceRecord(currentServiceKekeId,date,condition,serviced,mechanic,notes)){
+      toast('⚠️ Duplicate blocked — an identical service record (same date, condition, serviced status, mechanic & notes) already exists for this keke. Change something to record a new one.','error');
+      return;
+    }
+    const svcEntry={id:uid(),keke_id:currentServiceKekeId,date,condition,serviced,mechanic,notes,recorded_by:currentUser?.name||'?',created_at:new Date().toISOString()};
+    const k = LOCAL.getKekes().find(x=>x.id===currentServiceKekeId);
+    // Show the record immediately (optimistic update), then save in the background.
+    CACHE.serviceRecords = CACHE.serviceRecords || [];
+    CACHE.serviceRecords.unshift(svcEntry);
+    document.getElementById('svc_date').value=getTodayStr();
+    document.getElementById('svc_notes').value = '';
+    document.getElementById('svc_mechanic').value = '';
+    renderServiceHistory();
+    renderMaintenance();
+    const ok = await _sbSaveServiceRecord(svcEntry);
+    if (ok) {
+      logActivity(`Service logged: ${k?.plate||''}`, 'edit', `Driver: ${k?.driver_name||''} | Condition: ${condition} | Serviced: ${serviced} | By: ${currentUser?.name||'?'}`);
+      toast('Service record saved!');
+    } else {
+      // Save failed — take the record back out so the screen never shows something that isn't stored
+      CACHE.serviceRecords = (CACHE.serviceRecords||[]).filter(r => r.id !== svcEntry.id);
+      renderServiceHistory();
+      renderMaintenance();
+      toast('Could not save service record — check your connection and try again.', 'error');
+    }
+  } finally {
+    _savingService = false;
+  }
 }
 
 function deleteServiceRecord(recId) {
@@ -2537,8 +2642,9 @@ window.addEventListener('load', async () => {
       document.getElementById('loginPage').style.display = 'none';
       document.getElementById('app').classList.add('active');
       applyRoleUI();
+      hideAllViewsForService();
       await bootstrap();
-      showView('dashboard');
+      showView(defaultView());
       startProactiveTokenRefresh();
     } catch (e) {
       // Corrupt stored data — clear and show login
